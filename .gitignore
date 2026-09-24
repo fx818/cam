@@ -15,5 +15,7 @@ htmlcov/
 node_modules/
 web/dist/
 web/node_modules/
+web/openapi.json
+web/.vite/
 *.log
 .DS_Store

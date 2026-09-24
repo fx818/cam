@@ -1,8 +1,11 @@
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from mcp.server.streamable_http_manager import StreamableHTTPASGIApp
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.routing import Route
@@ -42,6 +45,31 @@ class GatewayMount:
             await send({"type": "http.response.body", "body": body})
             return
         await self._app(scope, receive, send)
+
+
+WEB_DIST = Path(__file__).resolve().parents[3] / "web" / "dist"
+
+
+def mount_web(app: FastAPI) -> None:
+    index = WEB_DIST / "index.html"
+    if not index.is_file():
+        return
+    root = WEB_DIST.resolve()
+    assets = WEB_DIST / "assets"
+    if assets.is_dir():
+        app.mount("/assets", StaticFiles(directory=str(assets)), name="assets")
+
+    @app.get("/{full_path:path}", include_in_schema=False, response_model=None)
+    async def spa(full_path: str) -> FileResponse | JSONResponse:
+        if full_path == "mcp" or full_path.startswith(("api/", "api", "mcp/")):
+            return JSONResponse(
+                {"error": {"code": "NOT_FOUND", "message": "Not found."}}, status_code=404
+            )
+        if full_path:
+            candidate = (WEB_DIST / full_path).resolve()
+            if candidate.is_file() and candidate.is_relative_to(root):
+                return FileResponse(candidate)
+        return FileResponse(index)
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -90,6 +118,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(title="CAM", lifespan=lifespan)
     app.include_router(health_router)
     app.router.routes.append(Route("/mcp", endpoint=gateway, methods=["GET", "POST", "DELETE"]))
+    mount_web(app)
     return app
 
 
