@@ -5,4 +5,4 @@ TEST_DATABASE_URL = os.environ.get(
 )
 
 os.environ["CAM_DATABASE_URL"] = TEST_DATABASE_URL
-os.environ.setdefault("CAM_ENV", "dev")
+os.environ["CAM_ENV"] = "dev"

@@ -20,6 +20,17 @@ Notable: pre-commit hooks installed into `.git/hooks`.
 
 Notable: `docker compose up --build -d` → both services healthy; `curl localhost:8000/api/health` → `{"status":"ok"}` 200.
 
+## 2026-09-24 — Phase 0.3: config from env vars
+
+- `src/cam/config.py`: `Settings` (pydantic-settings, `CAM_` prefix, optional `.env` file) covering every variable in the Implementation spec's Configuration table.
+- Required in `CAM_ENV=prod`: `CAM_DATABASE_URL`, `CAM_ENCRYPTION_KEYS`, `CAM_ENCRYPTION_KEY_CURRENT`, `CAM_SESSION_SECRET` — startup fails with a clear `ValidationError` if missing. In `dev`, DB URL falls back to the compose default; encryption keys and session secret are generated ephemerally per process so nothing secret is ever committed and `docker compose up` works with no setup.
+- Encryption key format validated: `name:<base64>` entries, each 32 bytes, current must name a key in the set; numeric defaults validated `>= 1`; `CAM_LOG_LEVEL` validated and upper-cased; `CAM_BASE_URL` must be http(s).
+- `.env.example` documents all 14 variables with generation instructions; `.env` stays gitignored and blocked by a pre-commit hook.
+- App lifespan now loads `Settings`, stores them on `app.state`, creates the engine from `settings.database_url`, and applies `CAM_LOG_LEVEL` to logging.
+- Tests: 16 passing — dev defaults vs spec table, env overrides, prod enforcement, key format errors, `.env.example` completeness, `.env` gitignored. Tests use a `CleanSettings` subclass with `env_file=None` for hermetic runs.
+
+Notable: dev generates fresh encryption keys each process start — any credential encrypted in dev is unreadable after restart (fine for Phase 0; Phase 1.2 should pin stable test keys).
+
 ## Open questions
 
 _None._

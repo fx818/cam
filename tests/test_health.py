@@ -5,6 +5,7 @@ import httpx
 from fastapi import FastAPI
 
 from cam.api.main import create_app
+from cam.config import Settings
 
 
 @asynccontextmanager
@@ -25,7 +26,7 @@ async def test_health_ok() -> None:
 
 
 async def test_health_unreachable_db_returns_503() -> None:
-    app = create_app("postgresql+asyncpg://cam:cam@127.0.0.1:59999/cam_missing")
+    app = create_app(Settings(database_url="postgresql+asyncpg://cam:cam@127.0.0.1:59999/nope"))
     async with health_client(app) as client:
         response = await client.get("/api/health")
     assert response.status_code == 503
