@@ -390,6 +390,25 @@ async def revoke_service_visibility(
     return service
 
 
+async def get_admin_service(session: AsyncSession, *, slug: str) -> Service:
+    return await _get_admin_service(session, slug)
+
+
+async def list_service_visibility_grantees(
+    session: AsyncSession, *, service: Service
+) -> list[dict[str, str]]:
+    rows = await session.execute(
+        select(User.email, User.handle)
+        .join(ServiceVisibility, ServiceVisibility.user_id == User.id)
+        .where(
+            ServiceVisibility.org_id == service.org_id,
+            ServiceVisibility.service_id == service.id,
+        )
+        .order_by(User.email)
+    )
+    return [{"email": email, "handle": handle} for email, handle in rows.all()]
+
+
 def _validate_register_auth(
     *,
     auth_type: str,
