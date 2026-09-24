@@ -117,7 +117,8 @@ export interface paths {
         /** Get Services */
         get: operations["get_services_api_services_get"];
         put?: never;
-        post?: never;
+        /** Create Service */
+        post: operations["create_service_api_services_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -153,7 +154,8 @@ export interface paths {
         /** Get Service Tools */
         get: operations["get_service_tools_api_services__owner___slug__tools_get"];
         put?: never;
-        post?: never;
+        /** Create Service Tool */
+        post: operations["create_service_tool_api_services__owner___slug__tools_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -188,6 +190,74 @@ export interface paths {
         put?: never;
         /** Resync Service */
         post: operations["resync_service_api_services__owner___slug__resync_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/services/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Test Service */
+        post: operations["test_service_api_services_test_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/services/{ref}/connect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Connect Service */
+        post: operations["connect_service_api_services__ref__connect_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/services/{owner}/{slug}/connect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Connect Service Ref */
+        post: operations["connect_service_ref_api_services__owner___slug__connect_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/oauth/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Oauth Callback */
+        get: operations["oauth_callback_api_oauth_callback_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -287,11 +357,135 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List Skills */
-        get: operations["list_skills_api_skills_get"];
+        /** Get Skills */
+        get: operations["get_skills_api_skills_get"];
+        put?: never;
+        /** Create Skill */
+        post: operations["create_skill_api_skills_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/skills/{owner}/{slug}/versions/{version_number}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Skill Version Detail */
+        get: operations["get_skill_version_detail_api_skills__owner___slug__versions__version_number__get"];
         put?: never;
         post?: never;
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/skills/{owner}/{slug}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Skill Detail */
+        get: operations["get_skill_detail_api_skills__owner___slug__get"];
+        put?: never;
+        post?: never;
+        /** Delete Skill */
+        delete: operations["delete_skill_api_skills__owner___slug__delete"];
+        options?: never;
+        head?: never;
+        /** Patch Skill */
+        patch: operations["patch_skill_api_skills__owner___slug__patch"];
+        trace?: never;
+    };
+    "/api/skills/{owner}/{slug}/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Skill Versions */
+        get: operations["get_skill_versions_api_skills__owner___slug__versions_get"];
+        put?: never;
+        /** Create Skill Version */
+        post: operations["create_skill_version_api_skills__owner___slug__versions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/skills/{owner}/{slug}/rollback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Rollback Skill */
+        post: operations["rollback_skill_api_skills__owner___slug__rollback_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/skills/{owner}/{slug}/diff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Version Diff */
+        get: operations["get_version_diff_api_skills__owner___slug__diff_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/skills/{owner}/{slug}/shares": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Skill Shares */
+        get: operations["get_skill_shares_api_skills__owner___slug__shares_get"];
+        put?: never;
+        /** Create Skill Share */
+        post: operations["create_skill_share_api_skills__owner___slug__shares_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/skill-shares/{share_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Skill Share */
+        delete: operations["delete_skill_share_api_skill_shares__share_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -454,6 +648,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/services": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Template */
+        post: operations["create_template_api_admin_services_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/overview": {
         parameters: {
             query?: never;
@@ -507,6 +718,125 @@ export interface components {
             /** Note */
             note?: string | null;
         };
+        /** ConnectBody */
+        ConnectBody: {
+            /** Credential */
+            credential?: string | null;
+        };
+        /** CreateServiceBody */
+        CreateServiceBody: {
+            /** Slug */
+            slug: string;
+            /** Name */
+            name: string;
+            /** Url */
+            url: string;
+            /** Transport */
+            transport?: ("streamable-http" | "sse") | null;
+            /**
+             * Auth Type
+             * @default none
+             * @enum {string}
+             */
+            auth_type: "none" | "static-header" | "bearer" | "api-key" | "basic" | "oauth";
+            /** Header Name */
+            header_name?: string | null;
+            /** Credential */
+            credential?: string | null;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            /** Timeout Ms */
+            timeout_ms?: number | null;
+            /** Response Cap Tokens */
+            response_cap_tokens?: number | null;
+            /**
+             * Kind
+             * @default mcp
+             * @enum {string}
+             */
+            kind: "mcp" | "rest";
+            /** Spec Url */
+            spec_url?: string | null;
+            /** Api Key Name */
+            api_key_name?: string | null;
+            /** Api Key In */
+            api_key_in?: ("header" | "query") | null;
+            /** Username */
+            username?: string | null;
+            /** Tools */
+            tools?: string[] | null;
+        };
+        /** CreateTemplateBody */
+        CreateTemplateBody: {
+            /** Slug */
+            slug: string;
+            /** Name */
+            name: string;
+            /** Url */
+            url: string;
+            /** Transport */
+            transport?: ("streamable-http" | "sse") | null;
+            /**
+             * Auth Type
+             * @default none
+             * @enum {string}
+             */
+            auth_type: "none" | "static-header" | "bearer" | "api-key" | "basic" | "oauth";
+            /** Header Name */
+            header_name?: string | null;
+            /** Credential */
+            credential?: string | null;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            /** Timeout Ms */
+            timeout_ms?: number | null;
+            /** Response Cap Tokens */
+            response_cap_tokens?: number | null;
+            /**
+             * Kind
+             * @default mcp
+             * @enum {string}
+             */
+            kind: "mcp" | "rest";
+            /** Spec Url */
+            spec_url?: string | null;
+            /** Api Key Name */
+            api_key_name?: string | null;
+            /** Api Key In */
+            api_key_in?: ("header" | "query") | null;
+            /** Username */
+            username?: string | null;
+            /** Tools */
+            tools?: string[] | null;
+        };
+        /** DefineToolBody */
+        DefineToolBody: {
+            /** Name */
+            name: string;
+            /** Method */
+            method: string;
+            /** Path */
+            path: string;
+            /** Params */
+            params?: {
+                [key: string]: string;
+            } | null;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            /** Input Schema */
+            input_schema?: {
+                [key: string]: unknown;
+            } | null;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -523,6 +853,11 @@ export interface components {
         ResetPasswordBody: {
             /** Password */
             password: string;
+        };
+        /** RollbackBody */
+        RollbackBody: {
+            /** Version */
+            version: number;
         };
         /** RotateBody */
         RotateBody: {
@@ -559,10 +894,83 @@ export interface components {
                 [key: string]: unknown;
             } | null;
         };
+        /** ShareBody */
+        ShareBody: {
+            /** Email */
+            email: string;
+        };
         /** ShareCreateBody */
         ShareCreateBody: {
             /** Email */
             email: string;
+        };
+        /** SkillCreateBody */
+        SkillCreateBody: {
+            /**
+             * Tier
+             * @default personal
+             */
+            tier: string;
+            /** Slug */
+            slug?: string | null;
+            /**
+             * Visibility
+             * @default all
+             */
+            visibility: string;
+            /** Name */
+            name?: string | null;
+            /** Description */
+            description?: string | null;
+            /** Requires */
+            requires?: string[];
+            /**
+             * Body
+             * @default
+             */
+            body: string;
+            /** Notes */
+            notes?: string | null;
+            /** Files */
+            files?: components["schemas"]["SkillFileIn"][];
+            /** Zip Base64 */
+            zip_base64?: string | null;
+        };
+        /** SkillFileIn */
+        SkillFileIn: {
+            /** Path */
+            path: string;
+            /** Content */
+            content: string;
+        };
+        /** SkillPatchBody */
+        SkillPatchBody: {
+            /** Name */
+            name?: string | null;
+            /** Description */
+            description?: string | null;
+            /** Visibility */
+            visibility?: string | null;
+        };
+        /** SkillVersionBody */
+        SkillVersionBody: {
+            /** Name */
+            name?: string | null;
+            /** Description */
+            description?: string | null;
+            /** Requires */
+            requires?: string[];
+            /**
+             * Body
+             * @default
+             */
+            body: string;
+            /** Files */
+            files?: components["schemas"]["SkillFileIn"][];
+            /** Zip Base64 */
+            zip_base64?: string | null;
+            /** Notes */
+            notes?: string | null;
         };
         /** TokenCreateBody */
         TokenCreateBody: {
@@ -823,6 +1231,41 @@ export interface operations {
             };
         };
     };
+    create_service_api_services_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateServiceBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_service_api_services__owner___slug__get: {
         parameters: {
             query?: never;
@@ -963,6 +1406,44 @@ export interface operations {
             };
         };
     };
+    create_service_tool_api_services__owner___slug__tools_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                owner: string;
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DefineToolBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     patch_tool_api_tools__tool_id__patch: {
         parameters: {
             query?: never;
@@ -1021,6 +1502,150 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    test_service_api_services_test_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateServiceBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    connect_service_api_services__ref__connect_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ref: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ConnectBody"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    connect_service_ref_api_services__owner___slug__connect_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                owner: string;
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ConnectBody"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    oauth_callback_api_oauth_callback_get: {
+        parameters: {
+            query?: {
+                code?: string | null;
+                state?: string | null;
+                error?: string | null;
+                error_description?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -1247,9 +1872,12 @@ export interface operations {
             };
         };
     };
-    list_skills_api_skills_get: {
+    get_skills_api_skills_get: {
         parameters: {
-            query?: never;
+            query?: {
+                limit?: number | null;
+                cursor?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -1265,6 +1893,444 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_skill_api_skills_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SkillCreateBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_skill_version_detail_api_skills__owner___slug__versions__version_number__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                owner: string;
+                slug: string;
+                version_number: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_skill_detail_api_skills__owner___slug__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                owner: string;
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_skill_api_skills__owner___slug__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                owner: string;
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: boolean;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    patch_skill_api_skills__owner___slug__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                owner: string;
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SkillPatchBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_skill_versions_api_skills__owner___slug__versions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                owner: string;
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_skill_version_api_skills__owner___slug__versions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                owner: string;
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SkillVersionBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rollback_skill_api_skills__owner___slug__rollback_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                owner: string;
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RollbackBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_version_diff_api_skills__owner___slug__diff_get: {
+        parameters: {
+            query: {
+                from_version: number;
+                to?: number | null;
+                path?: string | null;
+            };
+            header?: never;
+            path: {
+                owner: string;
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_skill_shares_api_skills__owner___slug__shares_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                owner: string;
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_skill_share_api_skills__owner___slug__shares_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                owner: string;
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ShareBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_skill_share_api_skill_shares__share_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                share_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: boolean;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -1667,6 +2733,41 @@ export interface operations {
                 content: {
                     "application/json": {
                         [key: string]: boolean;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_template_api_admin_services_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateTemplateBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
                     };
                 };
             };

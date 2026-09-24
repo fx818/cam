@@ -252,6 +252,24 @@ async def current_version(session: AsyncSession, skill: Skill) -> SkillVersion |
     return await session.get(SkillVersion, skill.current_version_id)
 
 
+async def current_files(session: AsyncSession, skill: Skill) -> dict[str, str]:
+    version = await current_version(session, skill)
+    if version is None:
+        return {}
+    return await version_files(session, version.id)
+
+
+async def version_by_number(
+    session: AsyncSession, skill: Skill, number: int
+) -> SkillVersion | None:
+    result = await session.execute(
+        select(SkillVersion).where(
+            SkillVersion.skill_id == skill.id, SkillVersion.version == number
+        )
+    )
+    return result.scalar_one_or_none()
+
+
 async def delete_skill(session: AsyncSession, skill: Skill) -> None:
     version_rows = await session.execute(
         select(SkillVersion.id).where(SkillVersion.skill_id == skill.id)

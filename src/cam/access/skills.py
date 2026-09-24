@@ -64,6 +64,7 @@ class ResolvedSkill:
     skill: Skill
     ref: str
     owner_handle: str | None
+    owner_user: User | None
     required_refs: tuple[str, ...]
     available: bool
     unavailable_reason: str | None
@@ -280,6 +281,7 @@ async def resolve_skill(
     state = await skill_access_state(session, org_id, user, skill)
     if state == "none":
         raise SkillNotFound(raw_ref)
+    owner_user = await session.get(User, skill.owner_user_id) if skill.owner_user_id else None
     available, reason, requires = await analyze_requirements(session, org_id, user, skill)
     if state == "owner_deactivated":
         available = False
@@ -288,6 +290,7 @@ async def resolve_skill(
         skill=skill,
         ref=skill_ref(skill, owner_handle),
         owner_handle=owner_handle,
+        owner_user=owner_user,
         required_refs=requires,
         available=available,
         unavailable_reason=reason,
