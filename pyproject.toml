@@ -42,7 +42,7 @@ select = ["ASYNC", "B", "E", "F", "I", "RUF", "SIM", "UP"]
 quote-style = "double"
 
 [tool.pyright]
-include = ["src", "tests"]
+include = ["src", "tests", "alembic"]
 pythonVersion = "3.14"
 typeCheckingMode = "strict"
 venvPath = "."
