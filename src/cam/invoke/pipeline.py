@@ -44,11 +44,11 @@ from cam.invoke.errors import (
     not_found,
     owner_deactivated,
     service_disabled,
-    skills_unavailable,
 )
 from cam.invoke.rate_limit import RateLimiter
 from cam.invoke.truncation import truncate_blocks
 from cam.invoke.validation import validate_args
+from cam.skills import actions as skill_actions
 from cam.upstream.errors import UpstreamError
 from cam.upstream.pool import SessionPool
 from cam.upstream.rest import execute_rest
@@ -339,6 +339,7 @@ async def _dispatch(
     service: Any,
     tool_id: Any,
     args: Any,
+    path: Any,
 ) -> CamResult | dict[str, Any]:
     if action is None:
         raise invalid_args("action", "is required")
@@ -361,7 +362,35 @@ async def _dispatch(
                 "per token. Retry later.",
             )
         return await _invoke(deps, identity, tool_id, args)
-    raise skills_unavailable()
+    payload, audit_ref = await _skill_actions(
+        deps,
+        identity,
+        action=action,
+        skill_id=tool_id,
+        path=path,
+    )
+    return payload_result(payload, audit_ref)
+
+
+async def _skill_actions(
+    deps: GatewayDeps,
+    identity: AuthenticatedIdentity,
+    *,
+    action: str,
+    skill_id: Any,
+    path: Any,
+) -> tuple[dict[str, Any], AuditRef | None]:
+    if action == "list_skills":
+        payload = await skill_actions.list_skills_payload(deps.session_factory, identity)
+        return payload, None
+    async with deps.session_factory() as session:
+        if action == "load_skill":
+            return await skill_actions.load_skill_payload(
+                session, identity.org_id, identity.user, skill_id
+            )
+        return await skill_actions.read_skill_file_payload(
+            session, identity.org_id, identity.user, skill_id, path
+        )
 
 
 async def handle(
@@ -375,7 +404,6 @@ async def handle(
     args: Any = None,
     path: Any = None,
 ) -> CamResult:
-    del path
     started = time.monotonic()
     captured_args: dict[str, Any] | None = None
     if action == "invoke":
@@ -392,6 +420,7 @@ async def handle(
             service=service,
             tool_id=id,
             args=args,
+            path=path,
         )
     except CamError as exc:
         cam_error = exc

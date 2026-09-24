@@ -230,12 +230,19 @@ async def test_unknown_action_invalid_args(mcp_a: McpConnection) -> None:
     assert "nuke" in error["message"]
 
 
-async def test_skills_actions_not_implemented(mcp_a: McpConnection) -> None:
-    for action in ("list_skills", "load_skill", "read_skill_file"):
+async def test_skills_actions_validate_arguments(mcp_a: McpConnection) -> None:
+    result = await mcp_a.call({"action": "list_skills"})
+    payload = make_result_payload(result)
+    assert isinstance(payload["skills"], list)
+    for action in ("load_skill", "read_skill_file"):
         result = await mcp_a.call({"action": action})
         error = error_payload(result)
-        assert error["code"] == "INTERNAL"
-        assert error["message"] == "Skills are not yet available in this CAM build."
+        assert error["code"] == "INVALID_ARGS"
+        assert "id" in error["message"]
+    missing_path = error_payload(
+        await mcp_a.call({"action": "read_skill_file", "id": "global/nope"})
+    )
+    assert missing_path["code"] == "INVALID_ARGS"
 
 
 async def test_session_bound_to_initializing_token(gateway: GatewayEnv) -> None:

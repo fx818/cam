@@ -97,7 +97,10 @@ def internal(message: str = "Internal CAM error.") -> CamError:
 
 
 def skills_unavailable() -> CamError:
-    return CamError(CamErrorCode.INTERNAL, "Skills are not yet available in this CAM build.")
+    return CamError(
+        CamErrorCode.SKILL_UNAVAILABLE,
+        "This skill is unavailable: a required service is not accessible.",
+    )
 
 
 def map_upstream_error(

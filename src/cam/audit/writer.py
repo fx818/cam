@@ -23,10 +23,11 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True, slots=True)
 class AuditRef:
-    service_id: uuid.UUID
+    service_id: uuid.UUID | None
     connection_id: uuid.UUID | None = None
     tool_name: str | None = None
     owner_user_id: uuid.UUID | None = None
+    skill_version_id: uuid.UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,7 +65,9 @@ class AuditEvent:
             connection_id=ref.connection_id,
             owner_user_id=ref.owner_user_id,
             tool_name=ref.tool_name,
-            skill_version_id=self.skill_version_id,
+            skill_version_id=ref.skill_version_id
+            if ref.skill_version_id is not None
+            else self.skill_version_id,
             args=self.args,
             status=self.status,
             error_code=self.error_code,
