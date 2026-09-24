@@ -1,5 +1,6 @@
 import re
-from typing import Literal
+from collections.abc import Sequence
+from typing import Any, Literal
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,11 +18,18 @@ McpTransport = Literal["streamable-http", "sse"]
 McpAuthType = Literal["none", "static-header", "bearer"]
 ServiceVisibilityLevel = Literal["all", "restricted"]
 ServiceStatus = Literal["active", "disabled"]
+ServiceTier = Literal["global", "template", "personal"]
+ServiceKind = Literal["mcp", "rest"]
+RegisterAuthType = Literal["none", "static-header", "bearer", "api-key", "basic", "oauth"]
 
 _SLUG_PATTERN = re.compile(r"^[a-z0-9]+(?:[._-][a-z0-9]+)*$")
 _HTTP_SCHEMES = ("http://", "https://")
 _VISIBILITY_LEVELS = ("all", "restricted")
 _SERVICE_STATUSES = ("active", "disabled")
+_AUTH_TYPES = ("none", "static-header", "bearer", "api-key", "basic", "oauth")
+_API_KEY_LOCATIONS = ("header", "query")
+_KINDS = ("mcp", "rest")
+_TIERS = ("global", "template", "personal")
 
 
 class ServiceError(Exception):
@@ -380,3 +388,233 @@ async def revoke_service_visibility(
     )
     await session.flush()
     return service
+
+
+def _validate_register_auth(
+    *,
+    auth_type: str,
+    header_name: str | None,
+    credential: str | None,
+    api_key_name: str | None,
+    api_key_in: str | None,
+    username: str | None,
+    tier: str,
+    oauth_config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if auth_type not in _AUTH_TYPES:
+        raise ServiceError(f"auth type must be one of {', '.join(_AUTH_TYPES)}")
+    needs_secret = auth_type in ("static-header", "bearer", "api-key", "basic")
+    secret_required = needs_secret and tier != "template"
+    auth_config: dict[str, Any] = {}
+    if auth_type == "static-header":
+        resolved_header_name = (header_name or "").strip()
+        if not resolved_header_name:
+            raise ServiceError("static-header auth requires a header name")
+        auth_config = {"header_name": resolved_header_name}
+    elif auth_type == "api-key":
+        resolved_key_name = (api_key_name or "").strip()
+        if not resolved_key_name:
+            raise ServiceError("api-key auth requires a key name")
+        location = (api_key_in or "header").strip()
+        if location not in _API_KEY_LOCATIONS:
+            raise ServiceError("api_key_in must be header or query")
+        auth_config = {"api_key_name": resolved_key_name, "api_key_in": location}
+    elif auth_type == "basic":
+        resolved_username = (username or "").strip()
+        if not resolved_username:
+            raise ServiceError("basic auth requires a username")
+        auth_config = {"username": resolved_username}
+    elif auth_type in ("bearer", "oauth"):
+        if auth_type == "oauth":
+            auth_config = {"oauth": "pending"} if not oauth_config else dict(oauth_config)
+    elif credential is not None:
+        raise ServiceError("auth type none does not take a credential")
+    if secret_required and credential is None:
+        raise ServiceError(f"{auth_type} auth requires a credential")
+    if not needs_secret and auth_type != "oauth" and credential is not None:
+        raise ServiceError(f"auth type {auth_type} does not take a credential")
+    return auth_config
+
+
+async def register_service(
+    session: AsyncSession,
+    *,
+    tier: ServiceTier,
+    slug: str,
+    name: str,
+    url: str,
+    kind: ServiceKind = "mcp",
+    transport: str | None = None,
+    auth_type: RegisterAuthType = "none",
+    header_name: str | None = None,
+    credential: str | None = None,
+    description: str = "",
+    spec_url: str | None = None,
+    api_key_name: str | None = None,
+    api_key_in: str | None = None,
+    username: str | None = None,
+    oauth_config: dict[str, Any] | None = None,
+    timeout_ms: int | None = None,
+    response_cap_tokens: int | None = None,
+    visibility: ServiceVisibilityLevel = "all",
+    owner: User | None = None,
+    tools: Sequence[str] | None = None,
+    ring: MasterKeyRing | None = None,
+) -> tuple[Service, Connection | None]:
+    if tier not in _TIERS:
+        raise ServiceError(f"tier must be one of {', '.join(_TIERS)}")
+    if kind not in _KINDS:
+        raise ServiceError(f"kind must be one of {', '.join(_KINDS)}")
+    if visibility not in _VISIBILITY_LEVELS:
+        raise ServiceError("visibility must be all or restricted")
+    resolved_slug = slug.strip().lower()
+    if not _SLUG_PATTERN.match(resolved_slug):
+        raise ServiceError(
+            "slug must start with a letter or digit and contain only lowercase "
+            "letters, digits, dots, underscores or hyphens"
+        )
+    resolved_name = name.strip()
+    if not resolved_name:
+        raise ServiceError("name must not be empty")
+    resolved_url = url.strip()
+    if not resolved_url.startswith(_HTTP_SCHEMES):
+        raise ServiceError("url must start with http:// or https://")
+    if kind == "mcp":
+        if transport not in ("streamable-http", "sse"):
+            raise ServiceError("transport must be streamable-http or sse for mcp services")
+    elif transport is not None:
+        raise ServiceError("rest services do not take a transport")
+
+    if tier == "personal":
+        if owner is None:
+            raise ServiceError("personal services require an owner")
+        if owner.status != "active" or owner.deactivated_at is not None:
+            raise ServiceError(f"user {owner.email} is not active")
+        org_id = owner.org_id
+    else:
+        if owner is not None:
+            raise ServiceError(f"{tier} services must not set an owner")
+        org = await ensure_org(session)
+        org_id = org.id
+
+    auth_config = _validate_register_auth(
+        auth_type=auth_type,
+        header_name=header_name,
+        credential=credential,
+        api_key_name=api_key_name,
+        api_key_in=api_key_in,
+        username=username,
+        tier=tier,
+        oauth_config=oauth_config,
+    )
+
+    restricted = tier == "personal"
+    allowlist: tuple[str, ...] = ()
+    if restricted:
+        allowlist = await load_url_allowlist(session, org_id=org_id)
+    try:
+        admit_url(resolved_url, restricted=restricted, allowlist=allowlist)
+    except ValueError as exc:
+        raise ServiceError(str(exc)) from exc
+    if spec_url:
+        try:
+            admit_url(spec_url.strip(), restricted=restricted, allowlist=allowlist)
+        except ValueError as exc:
+            raise ServiceError(str(exc)) from exc
+
+    if tier in ("global", "template"):
+        existing = await session.execute(
+            select(Service.id).where(
+                Service.org_id == org_id,
+                Service.slug == resolved_slug,
+                Service.tier.in_(("global", "template")),
+            )
+        )
+        if existing.first() is not None:
+            raise ServiceAlreadyExists(
+                f"service slug {resolved_slug!r} is already registered in this org"
+            )
+    else:
+        assert owner is not None
+        existing = await session.execute(
+            select(Service.id).where(
+                Service.org_id == org_id,
+                Service.tier == "personal",
+                Service.owner_user_id == owner.id,
+                Service.slug == resolved_slug,
+            )
+        )
+        if existing.first() is not None:
+            raise ServiceAlreadyExists(
+                f"personal service slug {resolved_slug!r} is already registered for this user"
+            )
+        template = await session.execute(
+            select(Service.id).where(
+                Service.org_id == org_id,
+                Service.tier == "template",
+                Service.slug == resolved_slug,
+            )
+        )
+        if template.first() is not None:
+            raise ServiceAlreadyExists(
+                f"slug {resolved_slug!r} is reserved by a template service in this org"
+            )
+
+    settings = Settings()
+    service = Service(
+        org_id=org_id,
+        tier=tier,
+        owner_user_id=owner.id if owner is not None else None,
+        slug=resolved_slug,
+        name=resolved_name,
+        description=description,
+        kind=kind,
+        url=resolved_url,
+        transport=transport if kind == "mcp" else None,
+        spec_url=spec_url.strip() if spec_url else None,
+        auth_type=auth_type,
+        auth_config=auth_config,
+        visibility=visibility if tier != "personal" else "all",
+        timeout_ms=timeout_ms if timeout_ms is not None else settings.default_timeout_s * 1000,
+        response_cap_tokens=(
+            response_cap_tokens
+            if response_cap_tokens is not None
+            else settings.default_response_cap_tokens
+        ),
+        status="active",
+        health="unknown",
+    )
+    session.add(service)
+    await session.flush()
+
+    connection: Connection | None = None
+    if auth_type != "oauth" and tier != "template":
+        key_ring = ring if ring is not None else get_default_key_ring()
+        key_version, data_key = await get_org_data_key(session, org_id, ring=key_ring)
+        connection = Connection(
+            org_id=org_id,
+            service_id=service.id,
+            user_id=owner.id if owner is not None else None,
+            secret_enc=_encrypt_credential(credential, data_key=data_key, key_version=key_version),
+            key_version=key_version,
+            status="connected",
+        )
+        session.add(connection)
+        await session.flush()
+
+    if kind == "rest" and service.spec_url:
+        from cam.registry.openapi import OpenAPIError, import_openapi_tools
+
+        policy = UrlPolicy(restricted=restricted, allowlist=allowlist)
+        try:
+            await import_openapi_tools(
+                session,
+                service=service,
+                spec_url=service.spec_url,
+                select_names=tools,
+                url_policy=policy,
+            )
+        except OpenAPIError as exc:
+            raise ServiceError(f"OpenAPI import failed: {exc}") from exc
+
+    return service, connection
