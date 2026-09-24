@@ -717,7 +717,7 @@ An end-to-end slice with no dashboard; admin tasks use a CLI.
 - [ ] 8.1 Container image deployed to GKE with TLS
 - [ ] 8.2 Postgres on Cloud SQL or in the cluster, with backups and a tested restore
 - [ ] 8.3 Encryption key moved into a secret manager
-- [ ] 8.4 Monitoring: CAM metrics and logs in Grafana, alerts on error rates and failing services
+- [x] 8.4 Monitoring: CAM metrics and logs in Grafana, alerts on error rates and failing services
 - [ ] 8.5 Org overview metrics chosen from pilot usage, then built
 - [ ] 8.6 Company-wide rollout
 
