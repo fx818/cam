@@ -45,6 +45,19 @@ export interface ServiceDetail {
   last_synced_at: string | null
   created_at: string | null
   owner: string | null
+  tool_counts?: Record<string, number>
+}
+
+export interface AdminTestResult {
+  ok: boolean
+  tool_count: number
+  pending_review_count: number
+  imported: number
+  updated: number
+  removed: number
+  status: string
+  error: string | null
+  hint: string | null
 }
 
 export interface ViewerInfo {

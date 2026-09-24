@@ -25,7 +25,7 @@ import {
 } from "@/components/ui/table"
 import { Textarea } from "@/components/ui/textarea"
 import { ApiError, apiFetch } from "@/lib/api"
-import type { ServiceDetail } from "@/lib/types"
+import type { AdminTestResult, ServiceDetail } from "@/lib/types"
 
 export interface VisibilityGrantee {
   email: string
@@ -53,6 +53,28 @@ function tierTag(tier: string) {
   if (tier === "global") return <Badge>global</Badge>
   if (tier === "template") return <Badge variant="warning">template</Badge>
   return <Badge variant="muted">{tier}</Badge>
+}
+
+export function testResultMessage(result: AdminTestResult): string {
+  if (result.ok) {
+    const pending =
+      result.pending_review_count > 0
+        ? ` (${result.pending_review_count} pending review — approve in Review queue)`
+        : ""
+    return `Connected — ${result.tool_count} tools imported${pending}.`
+  }
+  const hint = result.hint ? ` ${result.hint}` : ""
+  return `Test failed: ${result.error ?? "unknown error"}.${hint}`
+}
+
+function PendingBadge({ counts }: { counts: Record<string, number> }) {
+  const pending = counts.pending_review ?? 0
+  if (pending <= 0) return null
+  return (
+    <Link to="/admin/review-queue">
+      <Badge variant="warning">{pending} pending review</Badge>
+    </Link>
+  )
 }
 
 function VisibilityPanel({ service, onDone }: { service: ServiceDetail; onDone: () => void }) {
@@ -195,8 +217,10 @@ export function AdminServiceRows({
 }) {
   const queryClient = useQueryClient()
   const [togglingId, setTogglingId] = useState<string | null>(null)
+  const [syncingId, setSyncingId] = useState<string | null>(null)
   const [visibilityId, setVisibilityId] = useState<string | null>(null)
   const [message, setMessage] = useState<string | null>(null)
+  const [syncResults, setSyncResults] = useState<Record<string, AdminTestResult>>({})
 
   if (services.length === 0) {
     return (
@@ -233,7 +257,13 @@ export function AdminServiceRows({
                 <TableCell className="text-xs text-muted-foreground">
                   {service.visibility}
                 </TableCell>
-                <TableCell>{service.status}</TableCell>
+                <TableCell className="space-y-1">
+                  <span className="text-xs">
+                    {(service.tool_counts?.active ?? 0) + (service.tool_counts?.pending_review ?? 0)}{" "}
+                    tools
+                  </span>
+                  {service.tool_counts && <PendingBadge counts={service.tool_counts} />}
+                </TableCell>
                 <TableCell>
                   <Switch
                     checked={service.status === "active"}
@@ -261,6 +291,37 @@ export function AdminServiceRows({
                   <Button
                     size="sm"
                     variant="outline"
+                    disabled={syncingId === service.id}
+                    onClick={() => {
+                      setSyncingId(service.id)
+                      setSyncResults((prev) => ({
+                        ...prev,
+                        [service.id]: undefined as unknown as AdminTestResult,
+                      }))
+                      apiFetch<{ service: string; test: AdminTestResult }>(
+                        `/api/admin/services/${service.id}/resync`,
+                        { method: "POST", body: {} },
+                      )
+                        .then((res) => {
+                          setSyncingId(null)
+                          setSyncResults((prev) => ({ ...prev, [service.id]: res.test }))
+                          void queryClient.invalidateQueries({ queryKey: ["admin-services"] })
+                        })
+                        .catch((err: unknown) => {
+                          setSyncingId(null)
+                          setMessage(
+                            err instanceof ApiError
+                              ? err.message
+                              : "Could not test/sync the service.",
+                          )
+                        })
+                    }}
+                  >
+                    {syncingId === service.id ? "Syncing…" : "Test/Sync"}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
                     onClick={() => setVisibilityId(service.id)}
                   >
                     Visibility
@@ -274,6 +335,21 @@ export function AdminServiceRows({
           </TableBody>
         </Table>
       </div>
+      {services.some(
+        (service) => syncResults[service.id] !== undefined,
+      ) &&
+        services.map(
+          (service) =>
+            syncResults[service.id] !== undefined && (
+              <Alert
+                key={service.id}
+                variant={syncResults[service.id].ok ? "default" : "destructive"}
+              >
+                <span className="font-medium">{service.id}:</span>{" "}
+                {testResultMessage(syncResults[service.id])}
+              </Alert>
+            ),
+        )}
       {message && <p className="text-sm text-destructive">{message}</p>}
       {visibilityId && (
         <VisibilityPanel
@@ -354,7 +430,7 @@ export function RegisterGlobalServiceForm() {
       return setMessage("A credential is required for this auth type.")
     setSaving(true)
     setMessage(null)
-    apiFetch<{ service: ServiceDetail }>("/api/admin/services", {
+    apiFetch<{ service: ServiceDetail; test?: AdminTestResult }>("/api/admin/services", {
       method: "POST",
       body: requestBody(),
     })
@@ -363,7 +439,11 @@ export function RegisterGlobalServiceForm() {
         setDraft(initialDraft)
         void queryClient.invalidateQueries({ queryKey: ["admin-services"] })
         void queryClient.invalidateQueries({ queryKey: ["services"] })
-        setMessage(`Registered ${created.service.id}.`)
+        setMessage(
+          created.test
+            ? `Registered ${created.service.id}. ${testResultMessage(created.test)}`
+            : `Registered ${created.service.id}.`,
+        )
       })
       .catch((err: unknown) => {
         setSaving(false)
@@ -497,7 +577,7 @@ export function RegisterGlobalServiceForm() {
           </div>
         )}
         {draft.authType !== "none" && (
-          <div className="space-y-1">
+          <div className="space-y-1 md:col-span-2">
             <Label htmlFor="admin-svc-cred">
               {draft.authType === "basic" ? "Password" : "Credential"}
             </Label>
@@ -507,6 +587,25 @@ export function RegisterGlobalServiceForm() {
               value={draft.credential}
               onChange={(event) => set("credential", event.target.value)}
             />
+            {draft.authType !== "basic" &&
+              draft.authType !== "bearer" &&
+              draft.authType !== "oauth" && (
+                <p className="text-xs text-muted-foreground">
+                  Full header value, exactly as the upstream expects it — include any prefix
+                  such as `Bearer ` if the upstream sends one.
+                </p>
+              )}
+            {draft.authType === "bearer" && (
+              <p className="text-xs text-muted-foreground">
+                The value is sent as `Authorization: Bearer &lt;value&gt;`.
+              </p>
+            )}
+            {draft.authType === "basic" && (
+              <p className="text-xs text-muted-foreground">
+                The password is combined with the username and sent as
+                `Authorization: Basic &lt;base64 of user:password&gt;`.
+              </p>
+            )}
           </div>
         )}
         <div className="space-y-1">

@@ -666,6 +666,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/services/{owner}/{slug}/resync": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Resync Admin Service */
+        post: operations["resync_admin_service_api_admin_services__owner___slug__resync_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/services/{owner}/{slug}/visibility": {
         parameters: {
             query?: never;
@@ -966,6 +983,11 @@ export interface components {
             username?: string | null;
             /** Tools */
             tools?: string[] | null;
+            /**
+             * Test
+             * @default true
+             */
+            test: boolean;
         };
         /** DefineToolBody */
         DefineToolBody: {
@@ -2946,6 +2968,40 @@ export interface operations {
                 "application/json": components["schemas"]["CreateTemplateBody"];
             };
         };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    resync_admin_service_api_admin_services__owner___slug__resync_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                owner: string;
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {
