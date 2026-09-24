@@ -333,6 +333,27 @@ class UrlAllowlist(Base):
     )
 
 
+class OAuthState(Base):
+    __tablename__ = "oauth_states"
+    __table_args__ = (
+        Index("uq_oauth_states_state", "state", unique=True),
+        Index("ix_oauth_states_org_id", "org_id"),
+        Index("ix_oauth_states_user_id", "user_id"),
+        Index("ix_oauth_states_service_id", "service_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    org_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("orgs.id"), nullable=False)
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id"), nullable=False)
+    service_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("services.id"), nullable=False)
+    state: Mapped[str] = mapped_column(String, nullable=False)
+    pkce_verifier: Mapped[str] = mapped_column(String, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+
 class LoginAttempt(Base):
     __tablename__ = "login_attempts"
     __table_args__ = (Index("ix_login_attempts_org_id", "org_id"),)

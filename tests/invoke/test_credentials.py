@@ -93,11 +93,24 @@ async def test_missing_secret_raises(db_session: AsyncSession) -> None:
         await resolve_credential_headers(db_session, service=service, connection=connection)
 
 
-async def test_unsupported_auth_type_raises(db_session: AsyncSession) -> None:
+async def test_oauth_auth_builds_bearer_header(db_session: AsyncSession) -> None:
     org = await ensure_org(db_session)
-    service = await _service(db_session, org.id, auth_type="oauth")
-    connection = await _connection(db_session, org.id, service, secret="whatever")
-    with pytest.raises(CredentialError, match="not supported"):
+    service = await _service(db_session, org.id, auth_type="oauth", auth_config={"oauth": "mcp"})
+    connection = await _connection(
+        db_session,
+        org.id,
+        service,
+        secret='{"access_token": "oauth-tok", "token_type": "Bearer"}',
+    )
+    headers = await resolve_credential_headers(db_session, service=service, connection=connection)
+    assert headers == {"Authorization": "Bearer oauth-tok"}
+
+
+async def test_oauth_missing_secret_raises(db_session: AsyncSession) -> None:
+    org = await ensure_org(db_session)
+    service = await _service(db_session, org.id, auth_type="oauth", auth_config={"oauth": "mcp"})
+    connection = await _connection(db_session, org.id, service)
+    with pytest.raises(CredentialError, match="no credential"):
         await resolve_credential_headers(db_session, service=service, connection=connection)
 
 

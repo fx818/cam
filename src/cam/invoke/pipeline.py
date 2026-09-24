@@ -29,12 +29,12 @@ from cam.access import (
     resolve_tool,
     tool_ref,
 )
-from cam.access.credentials import CredentialError, resolve_credential
+from cam.access.credentials import CredentialError, CredentialExpiredError, resolve_credential
 from cam.audit.writer import AuditEvent, AuditRef, AuditWriter
 from cam.config import Settings
 from cam.connections.tokens import AuthenticatedIdentity
 from cam.connections.url_policy import load_url_policy
-from cam.db.models import Service, Tool
+from cam.db.models import Service, Tool, User
 from cam.invoke.errors import (
     CamError,
     CamErrorCode,
@@ -202,6 +202,29 @@ async def _invoke(
             credential = await resolve_credential(
                 session, service=resolved.service, connection=connection
             )
+        except CredentialExpiredError as exc:
+            owner_id = connection.user_id or resolved.service.owner_user_id
+            owner_name = None
+            if owner_id is not None:
+                owner = await session.get(User, owner_id)
+                if owner is not None:
+                    owner_name = owner.display_name
+            if owner_name:
+                message = (
+                    f"{owner_name}'s {resolved.service.name} connection has expired. "
+                    f"{owner_name} needs to reconnect it in the CAM dashboard."
+                )
+            else:
+                message = (
+                    f"The {resolved.service.name} connection has expired. "
+                    "An admin needs to reconnect it in the CAM dashboard."
+                )
+            raise CamError(
+                CamErrorCode.CONNECTION_EXPIRED,
+                message,
+                service=resolved.service_ref,
+                audit_ref=audit_ref,
+            ) from exc
         except CredentialError as exc:
             raise CamError(
                 CamErrorCode.UPSTREAM_AUTH,

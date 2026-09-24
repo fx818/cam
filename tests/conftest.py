@@ -19,6 +19,7 @@ if str(TESTS_DIR) not in sys.path:
     sys.path.insert(0, str(TESTS_DIR))
 
 from fixtures.mock_mcp import MockMCPHandle, start_mock_mcp  # noqa: E402
+from fixtures.mock_oauth import MockOAuthHandle, start_mock_oauth  # noqa: E402
 from fixtures.mock_rest import MockRestHandle, start_mock_rest  # noqa: E402
 
 TEST_DATABASE_URL = os.environ.get(
@@ -95,3 +96,17 @@ async def mock_mcp_authed() -> AsyncIterator[MockMCPHandle]:
 async def mock_rest() -> AsyncIterator[MockRestHandle]:
     async with start_mock_rest() as handle:
         yield handle
+
+
+@pytest.fixture
+async def mock_oauth(mock_rest: MockRestHandle) -> AsyncIterator[MockOAuthHandle]:
+    async with start_mock_oauth(mock_rest.bearer_tokens) as handle:
+        mock_rest.oauth_issuer = handle.issuer
+        try:
+            yield handle
+        finally:
+            mock_rest.oauth_issuer = None
+            handle.bearer_tokens.clear()
+            handle.set_refresh_fail = False
+            handle.codes.clear()
+            handle.refresh_tokens.clear()

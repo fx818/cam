@@ -426,12 +426,39 @@ def _validate_register_auth(
         auth_config = {"username": resolved_username}
     elif auth_type in ("bearer", "oauth"):
         if auth_type == "oauth":
-            auth_config = {"oauth": "pending"} if not oauth_config else dict(oauth_config)
+            if oauth_config:
+                mode = str(oauth_config.get("oauth") or "plain").strip()
+                if mode == "plain":
+                    for key in ("authorization_endpoint", "token_endpoint", "client_id"):
+                        if not str(oauth_config.get(key) or "").strip():
+                            raise ServiceError(f"plain OAuth requires {key}")
+                    auth_config = {
+                        "oauth": "plain",
+                        "authorization_endpoint": str(
+                            oauth_config["authorization_endpoint"]
+                        ).strip(),
+                        "token_endpoint": str(oauth_config["token_endpoint"]).strip(),
+                        "client_id": str(oauth_config["client_id"]).strip(),
+                        "scopes": str(oauth_config.get("scopes") or ""),
+                    }
+                    if oauth_config.get("token_auth"):
+                        auth_config["token_auth"] = str(oauth_config["token_auth"])
+                elif mode in ("mcp", "pending"):
+                    auth_config = {"oauth": mode}
+                else:
+                    raise ServiceError("oauth config mode must be plain, mcp or pending")
+            else:
+                auth_config = {"oauth": "pending"}
     elif credential is not None:
         raise ServiceError("auth type none does not take a credential")
     if secret_required and credential is None:
         raise ServiceError(f"{auth_type} auth requires a credential")
-    if not needs_secret and auth_type != "oauth" and credential is not None:
+    if auth_type == "oauth":
+        if credential is not None and not oauth_config:
+            raise ServiceError(
+                "oauth with a client secret requires oauth_config with plain endpoints"
+            )
+    elif not needs_secret and credential is not None:
         raise ServiceError(f"auth type {auth_type} does not take a credential")
     return auth_config
 
@@ -586,6 +613,16 @@ async def register_service(
     )
     session.add(service)
     await session.flush()
+
+    if auth_type == "oauth" and credential is not None and credential.strip():
+        key_ring_secret = ring if ring is not None else get_default_key_ring()
+        secret_key_version, secret_data_key = await get_org_data_key(
+            session, org_id, ring=key_ring_secret
+        )
+        service.auth_secret_enc = encrypt_secret(
+            credential.strip().encode("utf-8"), secret_data_key, key_version=secret_key_version
+        )
+        await session.flush()
 
     connection: Connection | None = None
     if auth_type != "oauth" and tier != "template":

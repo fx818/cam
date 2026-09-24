@@ -9,6 +9,7 @@ from starlette.routing import Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from cam.api.errors import install_error_handlers
+from cam.api.routes.connect import router as connect_router
 from cam.api.routes.health import router as health_router
 from cam.api.routes.services_create import router as services_create_router
 from cam.audit.writer import AuditWriter
@@ -93,6 +94,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     install_error_handlers(app)
     app.include_router(health_router)
     app.include_router(services_create_router)
+    app.include_router(connect_router)
     app.router.routes.append(Route("/mcp", endpoint=gateway, methods=["GET", "POST", "DELETE"]))
     return app
 
