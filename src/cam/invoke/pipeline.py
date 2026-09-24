@@ -12,6 +12,8 @@ import logging
 import time
 from dataclasses import dataclass
 from typing import Any, cast
+from urllib.parse import urlencode
+from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -27,12 +29,12 @@ from cam.access import (
     resolve_tool,
     tool_ref,
 )
-from cam.access.credentials import CredentialError, resolve_credential_headers
+from cam.access.credentials import CredentialError, resolve_credential
 from cam.audit.writer import AuditEvent, AuditRef, AuditWriter
 from cam.config import Settings
 from cam.connections.tokens import AuthenticatedIdentity
 from cam.connections.url_policy import load_url_policy
-from cam.db.models import Tool
+from cam.db.models import Service, Tool
 from cam.invoke.errors import (
     CamError,
     CamErrorCode,
@@ -49,7 +51,9 @@ from cam.invoke.truncation import truncate_blocks
 from cam.invoke.validation import validate_args
 from cam.upstream.errors import UpstreamError
 from cam.upstream.pool import SessionPool
-from cam.upstream.types import ConnectionTarget, ContentBlock, TextBlock
+from cam.upstream.rest import execute_rest
+from cam.upstream.types import ConnectionTarget, ContentBlock, TextBlock, ToolCallOutcome
+from cam.upstream.url import UrlPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -195,7 +199,7 @@ async def _invoke(
             tool_name=resolved.tool.name,
         )
         try:
-            headers = await resolve_credential_headers(
+            credential = await resolve_credential(
                 session, service=resolved.service, connection=connection
             )
         except CredentialError as exc:
@@ -218,22 +222,28 @@ async def _invoke(
 
     service = resolved.service
     ref = resolved.service_ref
-    transport = (
-        service.transport if service.transport in ("streamable-http", "sse") else "streamable-http"
-    )
-    target = ConnectionTarget(
-        service_id=str(service.id),
-        connection_id=str(connection.id),
-        url=service.url,
-        transport=transport,
-        headers=headers,
-        url_policy=url_policy,
-    )
     try:
-        upstream = await deps.pool.session(target)
-        outcome = await upstream.call_tool(
-            resolved.tool.upstream_name, call_args, timeout_s=service.timeout_ms / 1000
-        )
+        if service.kind == "rest":
+            outcome = await execute_rest(
+                base_url=service.url,
+                binding=resolved.tool.rest_binding or {},
+                args=call_args,
+                headers=credential.headers,
+                query=credential.query,
+                timeout_ms=service.timeout_ms,
+                url_policy=url_policy,
+            )
+        else:
+            outcome = await _dispatch_mcp(
+                deps,
+                service=service,
+                connection_id=connection.id,
+                tool=resolved.tool,
+                call_args=call_args,
+                credential_headers=dict(credential.headers),
+                credential_query=dict(credential.query),
+                url_policy=url_policy,
+            )
     except UpstreamError as exc:
         raise map_upstream_error(
             exc, service_ref=ref, service_name=service.name, audit_ref=audit_ref
@@ -255,6 +265,38 @@ async def _invoke(
         is_error=False,
         truncated=truncated,
         audit_ref=audit_ref,
+    )
+
+
+async def _dispatch_mcp(
+    deps: GatewayDeps,
+    *,
+    service: Service,
+    connection_id: UUID,
+    tool: Tool,
+    call_args: dict[str, Any],
+    credential_headers: dict[str, str],
+    credential_query: dict[str, str],
+    url_policy: UrlPolicy,
+) -> ToolCallOutcome:
+    transport = (
+        service.transport if service.transport in ("streamable-http", "sse") else "streamable-http"
+    )
+    url = service.url
+    if credential_query:
+        joiner = "&" if "?" in url else "?"
+        url = f"{url}{joiner}{urlencode(credential_query)}"
+    target = ConnectionTarget(
+        service_id=str(service.id),
+        connection_id=str(connection_id),
+        url=url,
+        transport=transport,
+        headers=credential_headers,
+        url_policy=url_policy,
+    )
+    upstream = await deps.pool.session(target)
+    return await upstream.call_tool(
+        tool.upstream_name, call_args, timeout_s=service.timeout_ms / 1000
     )
 
 

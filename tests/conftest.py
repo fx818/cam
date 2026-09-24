@@ -19,6 +19,7 @@ if str(TESTS_DIR) not in sys.path:
     sys.path.insert(0, str(TESTS_DIR))
 
 from fixtures.mock_mcp import MockMCPHandle, start_mock_mcp  # noqa: E402
+from fixtures.mock_rest import MockRestHandle, start_mock_rest  # noqa: E402
 
 TEST_DATABASE_URL = os.environ.get(
     "CAM_TEST_DATABASE_URL", "postgresql+asyncpg://cam:cam@localhost:5432/cam_test"
@@ -87,4 +88,10 @@ async def fresh_counts(mock_mcp: MockMCPHandle) -> MockMCPHandle:
 @pytest.fixture(scope="session")
 async def mock_mcp_authed() -> AsyncIterator[MockMCPHandle]:
     async with start_mock_mcp(require_token="test-secret") as handle:
+        yield handle
+
+
+@pytest.fixture(scope="session")
+async def mock_rest() -> AsyncIterator[MockRestHandle]:
+    async with start_mock_rest() as handle:
         yield handle

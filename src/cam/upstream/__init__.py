@@ -14,6 +14,7 @@ from cam.upstream.errors import (
 )
 from cam.upstream.normalize import normalize_call_result
 from cam.upstream.pool import SessionPool, pool_key
+from cam.upstream.rest import RestRequest, build_rest_request, execute_rest, fetch_text
 from cam.upstream.types import (
     ConnectionTarget,
     ContentBlock,
@@ -30,6 +31,7 @@ __all__ = [
     "ErrorCode",
     "ImageBlock",
     "PinnedDestination",
+    "RestRequest",
     "SessionPool",
     "TextBlock",
     "ToolCallOutcome",
@@ -46,6 +48,9 @@ __all__ = [
     "UrlPolicyError",
     "admit_redirect",
     "admit_url",
+    "build_rest_request",
+    "execute_rest",
+    "fetch_text",
     "map_exception",
     "normalize_call_result",
     "pool_key",

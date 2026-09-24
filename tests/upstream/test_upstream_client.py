@@ -16,7 +16,7 @@ from cam.upstream import (
     UpstreamUnavailableError,
     UrlPolicy,
 )
-from cam.upstream import client as upstream_client
+from cam.upstream import pinning as upstream_pinning
 from fixtures.mock_mcp import MockMCPHandle
 
 
@@ -206,12 +206,10 @@ async def test_restricted_allowlist_connects_through_pinned_transport(
 
 
 def test_pinned_transport_installs_pinned_backend() -> None:
-    transport = upstream_client._pinned_transport(  # pyright: ignore[reportPrivateUsage]
-        "owned.example.com", "203.0.113.5"
-    )
+    transport = upstream_pinning.pinned_transport_httpx2("owned.example.com", "203.0.113.5")
     pool = transport._pool  # pyright: ignore[reportPrivateUsage]
     backend = pool._network_backend  # pyright: ignore[reportPrivateUsage]
-    assert isinstance(backend, upstream_client._PinnedNetworkBackend)  # pyright: ignore[reportPrivateUsage]
+    assert isinstance(backend, upstream_pinning._PinnedHttp2Backend)  # pyright: ignore[reportPrivateUsage]
 
 
 async def test_pinned_backend_redirects_only_matching_host(
@@ -226,7 +224,7 @@ async def test_pinned_backend_redirects_only_matching_host(
         raise RuntimeError(f"stop-connect {host}:{port}")
 
     monkeypatch.setattr(AutoBackend, "connect_tcp", fake_connect_tcp)
-    backend = upstream_client._PinnedNetworkBackend(  # pyright: ignore[reportPrivateUsage]
+    backend = upstream_pinning._PinnedHttp2Backend(  # pyright: ignore[reportPrivateUsage]
         "owned.example.com", "203.0.113.5"
     )
     with pytest.raises(RuntimeError, match="stop-connect"):
