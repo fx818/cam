@@ -1,0 +1,1 @@
+CREATE DATABASE cam_test;
