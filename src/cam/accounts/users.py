@@ -1,11 +1,13 @@
+from datetime import UTC, datetime
 from typing import Literal
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cam.connections.orgs import DEFAULT_ORG_SLUG, ensure_org
 from cam.connections.passwords import hash_password
-from cam.db.models import User
+from cam.db.models import CamToken, Connection, User
+from cam.upstream.pool import SessionPool
 
 UserRole = Literal["admin", "user"]
 UserKind = Literal["person", "team"]
@@ -41,6 +43,53 @@ async def get_user_by_email(session: AsyncSession, email: str) -> User | None:
     normalized = normalize_email(email)
     result = await session.execute(select(User).where(User.email == normalized))
     return result.scalar_one_or_none()
+
+
+async def deactivate_user(
+    session: AsyncSession,
+    *,
+    email: str | None = None,
+    user: User | None = None,
+    pool: SessionPool | None = None,
+) -> User:
+    """Deactivate a user: revoke tokens, disable connections, close sessions.
+
+    Idempotent. The user row is kept (audit history and handle stay reserved).
+    """
+    if (email is None) == (user is None):
+        raise UserError("provide exactly one of email or user")
+    if user is None:
+        assert email is not None
+        user = await get_user_by_email(session, email)
+        if user is None:
+            raise UserError(f"no user with email {email}")
+    if user.status == "deactivated" and user.deactivated_at is not None:
+        return user
+
+    now = datetime.now(UTC)
+    user.status = "deactivated"
+    user.deactivated_at = now
+    await session.execute(
+        update(CamToken)
+        .where(CamToken.user_id == user.id, CamToken.revoked_at.is_(None))
+        .values(revoked_at=now)
+    )
+    connections = list(
+        (
+            await session.execute(
+                select(Connection).where(
+                    Connection.org_id == user.org_id, Connection.user_id == user.id
+                )
+            )
+        ).scalars()
+    )
+    for connection in connections:
+        connection.status = "disabled"
+    await session.flush()
+    if pool is not None:
+        for connection in connections:
+            await pool.invalidate_connection(str(connection.service_id), str(connection.id))
+    return user
 
 
 async def create_user(

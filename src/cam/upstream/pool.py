@@ -80,7 +80,11 @@ class SessionPool:
 
     async def invalidate(self, target: ConnectionTarget) -> None:
         """Close and drop the pooled session for this connection now."""
-        key = (target.service_id, target.connection_id)
+        await self.invalidate_connection(target.service_id, target.connection_id)
+
+    async def invalidate_connection(self, service_id: str, connection_id: str) -> None:
+        """Close and drop the pooled session for (service, connection) now."""
+        key = (service_id, connection_id)
         lock = self._locks.setdefault(key, asyncio.Lock())
         async with lock:
             entry = self._entries.pop(key, None)

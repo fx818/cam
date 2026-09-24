@@ -1,6 +1,7 @@
 from cam.access.credentials import CredentialError, resolve_credential_headers
 from cam.access.resolution import (
     GLOBAL_OWNER,
+    OwnerDeactivated,
     ResolvedService,
     ResolvedTool,
     ServiceDisabled,
@@ -30,6 +31,7 @@ from cam.access.shares import (
 __all__ = [
     "GLOBAL_OWNER",
     "CredentialError",
+    "OwnerDeactivated",
     "ResolvedService",
     "ResolvedTool",
     "ServiceDisabled",

@@ -543,6 +543,28 @@ def test_share_and_unshare_service_cli_commands() -> None:
     assert "not shared" in again.output
 
 
+def test_deactivate_user_cli_command() -> None:
+    email = f"{_unique('deactcli')}@example.com"
+    runner = CliRunner()
+    created = runner.invoke(main, ["create-user", "--email", email, "--password", "pw-de-12345"])
+    assert created.exit_code == 0, created.output
+
+    deactivated = runner.invoke(main, ["deactivate-user", "--email", email])
+    assert deactivated.exit_code == 0, deactivated.output
+    assert "Deactivated" in deactivated.output
+    user = asyncio.run(_get_user(email))
+    assert user is not None
+    assert user.status == "deactivated"
+    assert user.deactivated_at is not None
+
+    again = runner.invoke(main, ["deactivate-user", "--email", email])
+    assert again.exit_code == 0, again.output
+
+    missing = runner.invoke(main, ["deactivate-user", "--email", f"{_unique('ghost')}@example.com"])
+    assert missing.exit_code == 1
+    assert "no user with email" in missing.output
+
+
 def test_register_personal_mcp_unknown_email_fails() -> None:
     result = CliRunner().invoke(
         main,

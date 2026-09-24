@@ -13,6 +13,7 @@ from cam.accounts.users import (
     UserKind,
     UserRole,
     create_user,
+    deactivate_user,
     get_user_by_email,
 )
 from cam.config import Settings
@@ -393,6 +394,21 @@ def unshare_service_cmd(ref: str, owner_email: str, grantee_email: str) -> None:
         except ShareError as exc:
             raise click.ClickException(str(exc)) from exc
         click.echo(f"Revoked share {share.id} on {ref} for {grantee_email}")
+
+    asyncio.run(_with_session(_apply))
+
+
+@main.command("deactivate-user")
+@click.option("--email", required=True, help="Email of the user to deactivate.")
+def deactivate_user_cmd(email: str) -> None:
+    """Deactivate a user: revoke tokens, disable connections, close sessions."""
+
+    async def _apply(session: AsyncSession) -> None:
+        try:
+            user = await deactivate_user(session, email=email)
+        except UserError as exc:
+            raise click.ClickException(str(exc)) from exc
+        click.echo(f"Deactivated {user.email} (handle {user.handle})")
 
     asyncio.run(_with_session(_apply))
 

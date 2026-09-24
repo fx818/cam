@@ -84,6 +84,14 @@ def service_disabled(service: str | None = None) -> CamError:
     return CamError(CamErrorCode.SERVICE_DISABLED, "This service is unavailable.", service=service)
 
 
+def owner_deactivated(service: str | None = None) -> CamError:
+    return CamError(
+        CamErrorCode.OWNER_DEACTIVATED,
+        "This service is no longer available: its owner's account is deactivated.",
+        service=service,
+    )
+
+
 def internal(message: str = "Internal CAM error.") -> CamError:
     return CamError(CamErrorCode.INTERNAL, message)
 

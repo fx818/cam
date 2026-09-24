@@ -9,6 +9,7 @@ Phase 2.3). Callers without access always get `ServiceNotFound`.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,6 +20,8 @@ from cam.db.models import Connection, Service, ServiceVisibility, Share, Tool, U
 
 GLOBAL_OWNER = "global"
 
+AccessState = Literal["none", "granted", "owner_deactivated"]
+
 
 class ServiceNotFound(Exception):
     """Unknown ID, excluded tool, or no access."""
@@ -26,6 +29,14 @@ class ServiceNotFound(Exception):
 
 class ServiceDisabled(Exception):
     """The service exists and the caller may reach it, but it is not active."""
+
+    def __init__(self, ref: str, *, audit_ref: AuditRef | None = None) -> None:
+        super().__init__(ref)
+        self.audit_ref = audit_ref
+
+
+class OwnerDeactivated(Exception):
+    """The caller holds a share, but the owner's account is deactivated."""
 
     def __init__(self, ref: str, *, audit_ref: AuditRef | None = None) -> None:
         super().__init__(ref)
@@ -91,14 +102,14 @@ def tool_ref(service: Service, tool: Tool, owner_handle: str | None = None) -> s
     return f"{service_ref(service, owner_handle)}/{tool.name}"
 
 
-async def has_access(
+async def _access_state(
     session: AsyncSession, identity: AuthenticatedIdentity, service: Service
-) -> bool:
+) -> AccessState:
     if service.org_id != identity.org_id:
-        return False
+        return "none"
     if service.tier == "personal":
         if service.owner_user_id == identity.user.id:
-            return True
+            return "granted"
         result = await session.execute(
             select(Share.id)
             .join(Connection, Share.connection_id == Connection.id)
@@ -110,9 +121,14 @@ async def has_access(
                 Share.revoked_at.is_(None),
             )
         )
-        return result.first() is not None
+        if result.first() is None:
+            return "none"
+        owner = await session.get(User, service.owner_user_id)
+        if owner is None or owner.status != "active" or owner.deactivated_at is not None:
+            return "owner_deactivated"
+        return "granted"
     if service.visibility == "all":
-        return True
+        return "granted"
     result = await session.execute(
         select(ServiceVisibility.id).where(
             ServiceVisibility.org_id == identity.org_id,
@@ -120,7 +136,30 @@ async def has_access(
             ServiceVisibility.user_id == identity.user.id,
         )
     )
-    return result.first() is not None
+    return "granted" if result.first() is not None else "none"
+
+
+async def has_access(
+    session: AsyncSession, identity: AuthenticatedIdentity, service: Service
+) -> bool:
+    return await _access_state(session, identity, service) == "granted"
+
+
+async def _require_access(
+    session: AsyncSession,
+    identity: AuthenticatedIdentity,
+    service: Service,
+    *,
+    ref: str,
+    resolved_ref: str,
+) -> None:
+    state = await _access_state(session, identity, service)
+    if state == "none":
+        raise ServiceNotFound(ref)
+    if state == "owner_deactivated":
+        raise OwnerDeactivated(resolved_ref, audit_ref=AuditRef(service_id=service.id))
+    if service.status != "active":
+        raise ServiceDisabled(resolved_ref, audit_ref=AuditRef(service_id=service.id))
 
 
 async def _lookup_service(
@@ -210,10 +249,7 @@ async def resolve_service(
     owner, slug = parse_service_ref(ref)
     service, owner_handle = await _lookup_service(session, identity, owner, slug)
     resolved_ref = service_ref(service, owner_handle)
-    if not await has_access(session, identity, service):
-        raise ServiceNotFound(ref)
-    if service.status != "active":
-        raise ServiceDisabled(resolved_ref, audit_ref=AuditRef(service_id=service.id))
+    await _require_access(session, identity, service, ref=ref, resolved_ref=resolved_ref)
     return ResolvedService(service=service, ref=resolved_ref, owner_handle=owner_handle)
 
 
@@ -239,10 +275,7 @@ async def resolve_tool(
     owner, slug, name = parse_tool_id(tool_id)
     service, owner_handle = await _lookup_service(session, identity, owner, slug)
     resolved_ref = service_ref(service, owner_handle)
-    if not await has_access(session, identity, service):
-        raise ServiceNotFound(tool_id)
-    if service.status != "active":
-        raise ServiceDisabled(resolved_ref, audit_ref=AuditRef(service_id=service.id))
+    await _require_access(session, identity, service, ref=tool_id, resolved_ref=resolved_ref)
     tool_result = await session.execute(
         select(Tool).where(Tool.service_id == service.id, Tool.name == name)
     )

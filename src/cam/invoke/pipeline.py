@@ -16,6 +16,7 @@ from typing import Any, cast
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from cam.access import (
+    OwnerDeactivated,
     ResolvedTool,
     ServiceDisabled,
     ServiceNotFound,
@@ -38,6 +39,7 @@ from cam.invoke.errors import (
     invalid_args,
     map_upstream_error,
     not_found,
+    owner_deactivated,
     service_disabled,
     skills_unavailable,
 )
@@ -319,6 +321,10 @@ async def handle(
         result = error_result(cam_error)
     except ServiceDisabled as exc:
         cam_error = service_disabled(str(exc) or None)
+        cam_error.audit_ref = exc.audit_ref
+        result = error_result(cam_error)
+    except OwnerDeactivated as exc:
+        cam_error = owner_deactivated(str(exc) or None)
         cam_error.audit_ref = exc.audit_ref
         result = error_result(cam_error)
     except Exception:
