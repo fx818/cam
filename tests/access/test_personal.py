@@ -19,6 +19,7 @@ from cam.access import (
 )
 from cam.connections.orgs import decrypt_for_org, ensure_org
 from cam.connections.tokens import AuthenticatedIdentity, create_token
+from cam.connections.url_policy import add_url_allowlist
 from cam.db.models import Connection, Service, Tool, User
 from cam.registry.services import (
     ServiceAlreadyExists,
@@ -263,3 +264,64 @@ async def test_duplicate_personal_slug_rules(db_session: AsyncSession) -> None:
     personal_ref = f"{owner.user.handle}/{slug}"
     personal_resolved = await resolve_service(db_session, owner, personal_ref)
     assert personal_resolved.ref == personal_ref
+
+
+async def test_personal_registration_rejects_internal_urls(db_session: AsyncSession) -> None:
+    org_slug = f"reject-{uuid.uuid4().hex[:10]}"
+    identity = await _make_identity(db_session, uuid.uuid4().hex[:8] + "p", org_slug=org_slug)
+    internal_urls = (
+        "http://127.0.0.1:9/mcp",
+        "http://localhost:9/mcp",
+        "http://app.localhost/mcp",
+        "http://169.254.169.254/latest/meta-data/",
+    )
+    for url in internal_urls:
+        with pytest.raises(ServiceError, match="blocked"):
+            await register_personal_mcp(
+                db_session,
+                owner=identity.user,
+                slug=_unique("bad"),
+                name="Bad",
+                url=url,
+                transport="streamable-http",
+                auth_type="none",
+            )
+
+
+async def test_personal_registration_allowlist_exempts_loopback(
+    db_session: AsyncSession,
+) -> None:
+    org_slug = f"allow-{uuid.uuid4().hex[:10]}"
+    identity = await _make_identity(db_session, uuid.uuid4().hex[:8] + "q", org_slug=org_slug)
+    await add_url_allowlist(db_session, pattern="127.0.0.0/8", org_slug=org_slug)
+    service, connection = await register_personal_mcp(
+        db_session,
+        owner=identity.user,
+        slug=_unique("lo"),
+        name="Loopback",
+        url="http://127.0.0.1:9/mcp",
+        transport="streamable-http",
+        auth_type="none",
+    )
+    assert service.tier == "personal"
+    assert service.url == "http://127.0.0.1:9/mcp"
+    assert connection.user_id == identity.user.id
+
+
+async def test_personal_slug_reserved_by_template_service(db_session: AsyncSession) -> None:
+    identity = await _make_identity(db_session, uuid.uuid4().hex[:8] + "r")
+    slug = _unique("reserved")
+    db_session.add(
+        Service(
+            org_id=identity.org_id,
+            tier="template",
+            owner_user_id=None,
+            slug=slug,
+            name="Template",
+            url="https://template.example.com/mcp",
+            transport="streamable-http",
+        )
+    )
+    await db_session.flush()
+    with pytest.raises(ServiceAlreadyExists, match="reserved by a template"):
+        await _register(db_session, identity.user, slug=slug)

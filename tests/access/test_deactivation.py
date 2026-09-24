@@ -34,6 +34,7 @@ from cam.connections.tokens import (
     authenticate_token,
     create_token,
 )
+from cam.connections.url_policy import add_url_allowlist
 from cam.db.models import AuditLog, Connection, Service, Tool, User
 from cam.db.session import create_db_engine, create_session_factory
 from cam.invoke.errors import CamErrorCode, owner_deactivated
@@ -48,9 +49,9 @@ OWNER_MESSAGE = "This service is no longer available: its owner's account is dea
 
 
 async def _make_identity(
-    db_session: AsyncSession, suffix: str
+    db_session: AsyncSession, suffix: str, *, org_slug: str = "indiamart"
 ) -> tuple[AuthenticatedIdentity, str]:
-    org = await ensure_org(db_session)
+    org = await ensure_org(db_session, slug=org_slug)
     user = User(
         org_id=org.id,
         email=f"deact-{suffix}@example.com",
@@ -158,7 +159,9 @@ async def test_handle_stays_reserved_after_deactivation(db_session: AsyncSession
 async def test_deactivate_closes_pooled_sessions(
     db_session: AsyncSession, mock_mcp: MockMCPHandle
 ) -> None:
-    identity, _raw = await _make_identity(db_session, uuid.uuid4().hex[:8] + "d")
+    org_slug = f"deactpool-{uuid.uuid4().hex[:10]}"
+    identity, _raw = await _make_identity(db_session, uuid.uuid4().hex[:8] + "d", org_slug=org_slug)
+    await add_url_allowlist(db_session, pattern="127.0.0.0/8", org_slug=org_slug)
     service, connection = await _personal_service(
         db_session, identity.user, url=mock_mcp.streamable_url
     )

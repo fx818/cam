@@ -6,6 +6,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from cam.upstream.url import UrlPolicy
+
 MessageHandler = Any  # mcp.client.session.MessageHandlerFnT; kept loose to avoid import cycles
 
 
@@ -19,6 +21,7 @@ class ConnectionTarget:
     transport: Literal["streamable-http", "sse"] = "streamable-http"
     headers: Mapping[str, str] = field(default_factory=dict[str, str])
     message_handler: MessageHandler | None = None
+    url_policy: UrlPolicy | None = None
 
 
 @dataclass(frozen=True, slots=True)

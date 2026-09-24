@@ -19,6 +19,7 @@ from cam.accounts.users import (
 from cam.config import Settings
 from cam.connections.orgs import DEFAULT_ORG_SLUG
 from cam.connections.tokens import create_token
+from cam.connections.url_policy import AllowlistError, add_url_allowlist, remove_url_allowlist
 from cam.db.session import create_db_engine, create_session_factory
 from cam.registry.services import (
     McpAuthType,
@@ -409,6 +410,41 @@ def deactivate_user_cmd(email: str) -> None:
         except UserError as exc:
             raise click.ClickException(str(exc)) from exc
         click.echo(f"Deactivated {user.email} (handle {user.handle})")
+
+    asyncio.run(_with_session(_apply))
+
+
+@main.command("add-url-allowlist")
+@click.option(
+    "--pattern",
+    required=True,
+    help="Exact hostname (e.g. windmill.internal) or CIDR (e.g. 10.0.0.0/8).",
+)
+@click.option("--note", default=None, help="Why this destination is allowed.")
+def add_url_allowlist_cmd(pattern: str, note: str | None) -> None:
+    """Allow a hostname or CIDR for personal-service outbound requests."""
+
+    async def _apply(session: AsyncSession) -> None:
+        try:
+            row = await add_url_allowlist(session, pattern=pattern, note=note)
+        except AllowlistError as exc:
+            raise click.ClickException(str(exc)) from exc
+        click.echo(f"Allowlisted {row.pattern}")
+
+    asyncio.run(_with_session(_apply))
+
+
+@main.command("remove-url-allowlist")
+@click.option("--pattern", required=True, help="Pattern to remove.")
+def remove_url_allowlist_cmd(pattern: str) -> None:
+    """Remove a hostname or CIDR from the URL allowlist."""
+
+    async def _apply(session: AsyncSession) -> None:
+        try:
+            normalized = await remove_url_allowlist(session, pattern=pattern)
+        except AllowlistError as exc:
+            raise click.ClickException(str(exc)) from exc
+        click.echo(f"Removed {normalized} from the allowlist")
 
     asyncio.run(_with_session(_apply))
 

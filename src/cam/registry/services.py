@@ -9,6 +9,7 @@ from cam.accounts.users import get_user_by_email
 from cam.config import Settings
 from cam.connections.crypto import MasterKeyRing, encrypt_secret, get_default_key_ring
 from cam.connections.orgs import ensure_org, get_org_data_key
+from cam.connections.url_policy import load_url_allowlist
 from cam.db.models import Connection, Service, ServiceVisibility, User
 from cam.upstream.url import admit_url
 
@@ -40,6 +41,8 @@ def _validate_registration(
     auth_type: str,
     header_name: str | None,
     credential: str | None,
+    restricted: bool = False,
+    allowlist: tuple[str, ...] = (),
 ) -> tuple[str, str, str, dict[str, str]]:
     resolved_slug = slug.strip().lower()
     if not _SLUG_PATTERN.match(resolved_slug):
@@ -56,7 +59,10 @@ def _validate_registration(
         raise ServiceError("name must not be empty")
     if not url.strip().startswith(_HTTP_SCHEMES):
         raise ServiceError("url must start with http:// or https://")
-    admit_url(url.strip())
+    try:
+        admit_url(url.strip(), restricted=restricted, allowlist=allowlist)
+    except ValueError as exc:
+        raise ServiceError(str(exc)) from exc
     auth_config: dict[str, str] = {}
     if auth_type == "static-header":
         resolved_header_name = (header_name or "").strip()
@@ -102,6 +108,7 @@ async def register_global_mcp(
         auth_type=auth_type,
         header_name=header_name,
         credential=credential,
+        restricted=False,
     )
 
     key_ring = ring if ring is not None else get_default_key_ring()
@@ -168,6 +175,9 @@ async def register_personal_mcp(
     description: str = "",
     ring: MasterKeyRing | None = None,
 ) -> tuple[Service, Connection]:
+    if owner.status != "active" or owner.deactivated_at is not None:
+        raise ServiceError(f"user {owner.email} is not active")
+    allowlist = await load_url_allowlist(session, org_id=owner.org_id)
     resolved_slug, resolved_name, resolved_url, auth_config = _validate_registration(
         slug=slug,
         name=name,
@@ -176,9 +186,9 @@ async def register_personal_mcp(
         auth_type=auth_type,
         header_name=header_name,
         credential=credential,
+        restricted=True,
+        allowlist=allowlist,
     )
-    if owner.status != "active" or owner.deactivated_at is not None:
-        raise ServiceError(f"user {owner.email} is not active")
 
     key_ring = ring if ring is not None else get_default_key_ring()
     existing = await session.execute(
@@ -192,6 +202,17 @@ async def register_personal_mcp(
     if existing.first() is not None:
         raise ServiceAlreadyExists(
             f"personal service slug {resolved_slug!r} is already registered for this user"
+        )
+    template = await session.execute(
+        select(Service.id).where(
+            Service.org_id == owner.org_id,
+            Service.tier == "template",
+            Service.slug == resolved_slug,
+        )
+    )
+    if template.first() is not None:
+        raise ServiceAlreadyExists(
+            f"slug {resolved_slug!r} is reserved by a template service in this org"
         )
 
     settings = Settings()

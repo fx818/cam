@@ -31,6 +31,7 @@ from cam.access.credentials import CredentialError, resolve_credential_headers
 from cam.audit.writer import AuditEvent, AuditRef, AuditWriter
 from cam.config import Settings
 from cam.connections.tokens import AuthenticatedIdentity
+from cam.connections.url_policy import load_url_policy
 from cam.db.models import Tool
 from cam.invoke.errors import (
     CamError,
@@ -204,6 +205,11 @@ async def _invoke(
                 service=resolved.service_ref,
                 audit_ref=audit_ref,
             ) from exc
+        url_policy = await load_url_policy(
+            session,
+            org_id=resolved.service.org_id,
+            restricted=resolved.service.tier == "personal",
+        )
         try:
             validate_args(resolved.tool.input_schema, call_args)
         except CamError as exc:
@@ -221,6 +227,7 @@ async def _invoke(
         url=service.url,
         transport=transport,
         headers=headers,
+        url_policy=url_policy,
     )
     try:
         upstream = await deps.pool.session(target)

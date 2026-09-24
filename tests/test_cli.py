@@ -659,3 +659,56 @@ def test_service_visibility_cli_commands() -> None:
     )
     assert unknown_service.exit_code == 1
     assert "no global or template service" in unknown_service.output
+
+
+def test_url_allowlist_cli_commands() -> None:
+    runner = CliRunner()
+    host = f"{_unique('wlhost')}.example.com"
+
+    added = runner.invoke(main, ["add-url-allowlist", "--pattern", host, "--note", "cli test"])
+    assert added.exit_code == 0, added.output
+    assert f"Allowlisted {host}" in added.output
+
+    duplicate = runner.invoke(main, ["add-url-allowlist", "--pattern", host])
+    assert duplicate.exit_code == 1
+    assert "already allowlisted" in duplicate.output
+
+    invalid = runner.invoke(main, ["add-url-allowlist", "--pattern", "not a pattern!"])
+    assert invalid.exit_code == 1
+    assert "must be a CIDR" in invalid.output
+
+    removed = runner.invoke(main, ["remove-url-allowlist", "--pattern", host])
+    assert removed.exit_code == 0, removed.output
+    assert f"Removed {host}" in removed.output
+
+    missing = runner.invoke(main, ["remove-url-allowlist", "--pattern", host])
+    assert missing.exit_code == 1
+    assert "not allowlisted" in missing.output
+
+
+def test_register_personal_mcp_rejects_internal_url_cli() -> None:
+    email = f"{_unique('polcli')}@example.com"
+    runner = CliRunner()
+    created = runner.invoke(main, ["create-user", "--email", email, "--password", "pw-pol-12345"])
+    assert created.exit_code == 0, created.output
+
+    result = runner.invoke(
+        main,
+        [
+            "register-personal-mcp",
+            "--email",
+            email,
+            "--slug",
+            _unique("internal"),
+            "--name",
+            "Internal",
+            "--url",
+            "http://127.0.0.1:9/mcp",
+            "--transport",
+            "streamable-http",
+            "--auth-type",
+            "none",
+        ],
+    )
+    assert result.exit_code == 1
+    assert "blocked" in result.output

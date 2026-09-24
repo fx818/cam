@@ -22,13 +22,14 @@ from cam.upstream.types import (
     ToolCallOutcome,
     UpstreamTool,
 )
-from cam.upstream.url import admit_url
+from cam.upstream.url import PinnedDestination, UrlPolicy, UrlPolicyError, admit_redirect, admit_url
 
 __all__ = [
     "ConnectionTarget",
     "ContentBlock",
     "ErrorCode",
     "ImageBlock",
+    "PinnedDestination",
     "SessionPool",
     "TextBlock",
     "ToolCallOutcome",
@@ -41,6 +42,9 @@ __all__ = [
     "UpstreamTimeoutError",
     "UpstreamTool",
     "UpstreamUnavailableError",
+    "UrlPolicy",
+    "UrlPolicyError",
+    "admit_redirect",
     "admit_url",
     "map_exception",
     "normalize_call_result",
