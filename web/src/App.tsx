@@ -9,6 +9,7 @@ import { LoginPage } from "@/pages/LoginPage"
 import { MyServicesPage } from "@/pages/MyServicesPage"
 import { RegisterServicePage } from "@/pages/RegisterServicePage"
 import { ServiceDetailPage } from "@/pages/ServiceDetailPage"
+import { SkillDetailPage } from "@/pages/SkillDetailPage"
 import { SkillsPage } from "@/pages/SkillsPage"
 import { AdminOverviewPage } from "@/pages/admin/AdminOverviewPage"
 import { AdminReviewQueuePage } from "@/pages/admin/AdminReviewQueuePage"
@@ -66,6 +67,7 @@ export function AppRoutes() {
         <Route path="/agent-setup" element={<AgentSetupPage />} />
         <Route path="/activity" element={<ActivityLogPage />} />
         <Route path="/skills" element={<SkillsPage />} />
+        <Route path="/skills/:owner/:slug" element={<SkillDetailPage />} />
         <Route
           path="/admin/users"
           element={

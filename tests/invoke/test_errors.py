@@ -57,7 +57,9 @@ def test_helpers_build_expected_messages() -> None:
     assert service_disabled("global/x").message == "This service is unavailable."
     assert service_disabled("global/x").service == "global/x"
     assert internal().message == "Internal CAM error."
-    assert skills_unavailable().message == ("Skills are not yet available in this CAM build.")
+    assert skills_unavailable().message == (
+        "This skill is unavailable: a required service is not accessible."
+    )
 
 
 def test_map_timeout_and_unavailable_share_message() -> None:

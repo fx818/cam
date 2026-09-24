@@ -356,6 +356,146 @@ class OAuthState(Base):
     )
 
 
+class Skill(Base):
+    __tablename__ = "skills"
+    __table_args__ = (
+        CheckConstraint("tier IN ('global', 'personal')", name="tier_valid"),
+        CheckConstraint("visibility IN ('all', 'restricted')", name="visibility_valid"),
+        CheckConstraint(
+            "(tier = 'personal' AND owner_user_id IS NOT NULL)"
+            " OR (tier = 'global' AND owner_user_id IS NULL)",
+            name="owner_by_tier",
+        ),
+        Index(
+            "uq_skills_org_slug_global",
+            "org_id",
+            "slug",
+            unique=True,
+            postgresql_where=text("tier = 'global'"),
+        ),
+        Index(
+            "uq_skills_org_owner_slug_personal",
+            "org_id",
+            "owner_user_id",
+            "slug",
+            unique=True,
+            postgresql_where=text("tier = 'personal'"),
+        ),
+        Index("ix_skills_org_id", "org_id"),
+        Index("ix_skills_owner_user_id", "owner_user_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    org_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("orgs.id"), nullable=False)
+    tier: Mapped[str] = mapped_column(String, nullable=False)
+    owner_user_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("users.id"))
+    slug: Mapped[str] = mapped_column(String, nullable=False)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    visibility: Mapped[str] = mapped_column(
+        String, nullable=False, default="all", server_default=text("'all'")
+    )
+    current_version_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+
+class SkillVersion(Base):
+    __tablename__ = "skill_versions"
+    __table_args__ = (
+        Index("uq_skill_versions_skill_version", "skill_id", "version", unique=True),
+        Index("ix_skill_versions_org_id", "org_id"),
+        Index("ix_skill_versions_skill_id", "skill_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    org_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("orgs.id"), nullable=False)
+    skill_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("skills.id"), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("users.id"))
+    notes: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+
+class SkillFile(Base):
+    __tablename__ = "skill_files"
+    __table_args__ = (
+        Index("uq_skill_files_version_path", "version_id", "path", unique=True),
+        Index("ix_skill_files_org_id", "org_id"),
+        Index("ix_skill_files_version_id", "version_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    org_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("orgs.id"), nullable=False)
+    version_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("skill_versions.id"), nullable=False
+    )
+    path: Mapped[str] = mapped_column(String, nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class SkillRequires(Base):
+    __tablename__ = "skill_requires"
+    __table_args__ = (
+        Index("uq_skill_requires_skill_service", "skill_id", "service_id", unique=True),
+        Index("ix_skill_requires_org_id", "org_id"),
+        Index("ix_skill_requires_skill_id", "skill_id"),
+        Index("ix_skill_requires_service_id", "service_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    org_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("orgs.id"), nullable=False)
+    skill_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("skills.id"), nullable=False)
+    service_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("services.id"), nullable=False)
+
+
+class SkillVisibility(Base):
+    __tablename__ = "skill_visibility"
+    __table_args__ = (
+        UniqueConstraint("skill_id", "user_id", name="uq_skill_visibility_skill_user"),
+        Index("ix_skill_visibility_org_id", "org_id"),
+        Index("ix_skill_visibility_skill_id", "skill_id"),
+        Index("ix_skill_visibility_user_id", "user_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    org_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("orgs.id"), nullable=False)
+    skill_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("skills.id"), nullable=False)
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+
+class SkillShare(Base):
+    __tablename__ = "skill_shares"
+    __table_args__ = (
+        Index(
+            "uq_skill_shares_active_skill_grantee",
+            "skill_id",
+            "grantee_user_id",
+            unique=True,
+            postgresql_where=text("revoked_at IS NULL"),
+        ),
+        Index("ix_skill_shares_org_id", "org_id"),
+        Index("ix_skill_shares_skill_id", "skill_id"),
+        Index("ix_skill_shares_grantee_user_id", "grantee_user_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    org_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("orgs.id"), nullable=False)
+    skill_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("skills.id"), nullable=False)
+    grantee_user_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id"), nullable=False)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class LoginAttempt(Base):
     __tablename__ = "login_attempts"
     __table_args__ = (Index("ix_login_attempts_org_id", "org_id"),)

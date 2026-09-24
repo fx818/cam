@@ -148,6 +148,31 @@ Merge reconciliation: unified dual-auth `api/deps.py` (bearer-first, then sessio
 - **Dashboard password min length 8** for admin-set passwords (defense-in-depth; CLI bootstrap stays non-empty).
 - **`POST …/resync`** returns 501 until Phase 5.3 lands.
 
+## 2026-09-24 — Phase 5: Lifecycle and background jobs
+
+- **5.1** APScheduler job runner (`cam/jobs/runner.py`) in the app lifespan: health check (300s), re-sync (3600s), log retention daily; graceful stop; `CAM_JOBS_ENABLED=false` for hermetic tests.
+- **5.2** Service health (`cam/jobs/health.py`): periodic probe (connect + tools/list, 15s timeout) + invoke-driven updates; healthy | failing | needs_reconnect; surfaces in services list/detail, dashboard and admin overview.
+- **5.3** Re-sync (`cam/registry/resync.py`): diff vs stored tools; personal → auto-enabled; global/template → pending_review; removed → `removed_upstream` (never deleted, excluded by access filters); description_override wins; REST re-fetches spec when set. Triggers: scheduler, `POST /api/services/{owner}/{slug}/resync` (501 replaced), and `tools/list_changed` via ResyncCoordinator (per-service lock, debounce).
+- **5.4** Review queue: `GET /api/admin/review-queue` + bulk approve (admin-only); admin dashboard screen with select-all; typed client regenerated.
+- **5.5** Credential rotation (`cam/connections/rotation.py`): org credential + own-connection secret re-encrypted under org data key, key_version follows, pooled session closed; route `POST /connections/{id}/rotate` completed.
+- **5.6** Log retention: `audit_logs` → native monthly RANGE partitions on `ts` (migration `b8d2f1a6c4e7`, PK `(id, ts)`, indexes preserved, reversible downgrade); daily job ensures current+2 months and drops partitions older than retention (30 days).
+
+Phase 5 **Done when** (automated): tier-correct new-tool onboarding (`tests/registry/test_resync.py` + `tests/api/test_review_queue.py`), failing/needs_reconnect badges (`tests/api/test_service_health_badge.py`, `tests/jobs/test_service_health.py`), old logs removed (`tests/jobs/test_retention.py`). **Manual checks for owner:** add a tool upstream → appears by tier within interval/Refresh; dead URL → badge turns red after an interval; Rotate secret → next call uses it; stale partition dropped by retention job.
+
+## 2026-09-24 — Phase 6: Skills (merged from branch `phase-6`)
+
+- **6.1** Skill tables (migration `c3e5f8a91b24`): skills/versions/files/requires/visibility/shares, org-scoped uniqueness; `cam.access/skills.py` single access boundary (visibility/share state + required-service access → available/unavailable reason).
+- **6.2** Upload & validation: zip/folder/editor; SKILL.md frontmatter required; text-only (.md/.txt/.json/.yaml/.csv), 100 KB/file / 50 files / 4 MB total, traversal + shebang + non-UTF-8 rejection; every save → new version; rollback re-materializes as a new version.
+- **6.3** Dashboard: skills API + UI (browse with groups/author, editor-with-preview / folder / zip upload, history + diff + rollback, owner-only shares, unavailable with reason).
+- **6.4** cam tool: `list_skills`/`load_skill`/`read_skill_file` per the Implementation spec contract; SKILL_UNAVAILABLE with reason; skills listed in the per-user description.
+- **6.5** `load_skill`/`read_skill_file` audited with `skill_version_id`.
+
+Phase 6 **Done when** (automated): `tests/gateway/test_phase6_done_when.py` — global skill loads through /mcp with a tool reference; user without required-service access sees unavailable + reason. **Manual check for owner:** dashboard skill create/upload-reject/rollback/share walkthrough + Claude Code load.
+
+Merge: Alembic heads merged (multiple-heads resolution `d5ffa516aec4`); pipeline import conflict and schema.ts conflict resolved (both sides kept). Final: 513 passed, vitest 14, tsc + build green.
+
+Phase 5+6 coordinator resolutions: no DEFAULT partition on audit_logs (revisit if long downtime expected); removed-tool reactivation follows tier rule; OAuth rotation via reconnect flow; `RESYNC_FAILED` API error for unreachable upstream; skill envelope `service=None` (consistent with skill-action precedent); UI diffs against current only (API supports `to=`).
+
 ## Open questions
 
 Resolved by coordinator (2026-09-24, Phase 2):

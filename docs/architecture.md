@@ -683,22 +683,22 @@ An end-to-end slice with no dashboard; admin tasks use a CLI.
 
 ### Phase 5: Lifecycle and background jobs
 
-- [ ] 5.1 Job runner: APScheduler inside the app
-- [ ] 5.2 Health checks from periodic checks and call results, with dashboard badges
-- [ ] 5.3 Re-sync on a schedule, on `list_changed` and on Refresh; auto-enable for personal, pending review for global and templates; mark `removed_upstream`
-- [ ] 5.4 Review queue screen with bulk approve
-- [ ] 5.5 Credential rotation without re-registering
-- [ ] 5.6 Log retention: monthly partitions, dropped after 30 days
+- [x] 5.1 Job runner: APScheduler inside the app
+- [x] 5.2 Health checks from periodic checks and call results, with dashboard badges
+- [x] 5.3 Re-sync on a schedule, on `list_changed` and on Refresh; auto-enable for personal, pending review for global and templates; mark `removed_upstream`
+- [x] 5.4 Review queue screen with bulk approve
+- [x] 5.5 Credential rotation without re-registering
+- [x] 5.6 Log retention: monthly partitions, dropped after 30 days
 
 **Done when:** a new upstream tool shows up correctly by tier, a broken service turns red in the dashboard, and old logs are removed automatically.
 
 ### Phase 6: Skills
 
-- [ ] 6.1 Tables: `skills`, `skill_versions`, `skill_files`, `skill_requires`, visibility and shares
-- [ ] 6.2 Upload: zip or folder, text files only, SKILL.md checks, size and count limits
-- [ ] 6.3 Dashboard: browse, edit with preview, history, diff, rollback, sharing with author shown
+- [x] 6.1 Tables: `skills`, `skill_versions`, `skill_files`, `skill_requires`, visibility and shares
+- [x] 6.2 Upload: zip or folder, text files only, SKILL.md checks, size and count limits
+- [x] 6.3 Dashboard: browse, edit with preview, history, diff, rollback, sharing with author shown
 - [ ] 6.4 `cam` actions: `list_skills`, `load_skill`, `read_skill_file`; unavailable marking; skills in the per-user description
-- [ ] 6.5 Skill loads logged with the version
+- [x] 6.5 Skill loads logged with the version
 
 **Done when:** a global PNS skill loads in Claude Code and guides it to `global/pns/run_query`, and a user without PNS access sees it marked unavailable.
 

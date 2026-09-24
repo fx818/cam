@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any, cast
 
 from mcp import types as mcp_types
@@ -17,6 +18,7 @@ from mcp.server.mcpserver.tools import Tool
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from cam.access import ServiceSummary, list_services
+from cam.access.skills import list_skills as access_list_skills
 from cam.connections.orgs import DEFAULT_ORG_SLUG, get_org_by_slug
 from cam.connections.tokens import AuthenticatedIdentity
 from cam.invoke.errors import internal
@@ -24,6 +26,14 @@ from cam.invoke.pipeline import AgentInfo, CamResult, GatewayDeps, error_result,
 from cam.upstream.types import TextBlock
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class SkillDescription:
+    id: str
+    description: str
+    available: bool
+
 
 CAM_TOOL_INPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -69,15 +79,22 @@ DESCRIPTION_FIRST_LINE = (
 _DESCRIPTION_LIMIT = 2000
 
 
-def build_tool_description(services: Sequence[ServiceSummary], skills: Sequence[str] = ()) -> str:
+def build_tool_description(
+    services: Sequence[ServiceSummary],
+    skills: Sequence[SkillDescription] = (),
+) -> str:
     lines = [DESCRIPTION_FIRST_LINE]
     lines.extend(f"{summary.id} ({summary.name}): {summary.description}" for summary in services)
-    lines.extend(f"skill {skill_id}" for skill_id in skills)
+    lines.extend(
+        f"skill {skill.id}: {skill.description}"
+        + (" (unavailable: requires services you cannot access)" if not skill.available else "")
+        for skill in skills
+    )
     text = "\n".join(lines)
     if len(text) <= _DESCRIPTION_LIMIT:
         return text
     names = [summary.id for summary in services]
-    names.extend(skills)
+    names.extend(f"skill {skill.id}" for skill in skills)
     compact = f"{DESCRIPTION_FIRST_LINE}\nAvailable: {', '.join(names)}"
     if len(compact) <= _DESCRIPTION_LIMIT:
         return compact
@@ -131,10 +148,19 @@ class ToolDescriptionMiddleware:
         try:
             async with self._session_factory() as session:
                 services = await list_services(session, identity)
+                skill_summaries = await access_list_skills(session, identity.org_id, identity.user)
         except Exception:
             logger.warning("could not build per-user cam tool description", exc_info=True)
             return result
-        description = build_tool_description(services)
+        skill_tuple = tuple(
+            SkillDescription(
+                id=summary.id,
+                description=summary.description,
+                available=summary.available,
+            )
+            for summary in skill_summaries
+        )
+        description = build_tool_description(services, skill_tuple)
         for entry in entries:
             if isinstance(entry, dict):
                 item = cast("dict[str, Any]", entry)
