@@ -124,16 +124,12 @@ export function RegisterServicePage() {
       setTestResult(result)
       setSelectedTools((result.tools ?? []).map((tool) => tool.name))
     } catch (err) {
-      if (err instanceof ApiError && (err.status === 404 || err.status === 501)) {
-        setTestResult({
-          ok: false,
-          message:
-            "Testing arrives with Phase 3. You can continue and save; test later from the service page.",
-        })
-      } else {
-        setError(err instanceof ApiError ? err.message : "Test failed.")
-        setTestResult(null)
-      }
+      setError(
+        err instanceof ApiError
+          ? err.message
+          : "Test failed. You can continue and save; test later from the service page.",
+      )
+      setTestResult(null)
     } finally {
       setTestRunning(false)
     }
@@ -149,13 +145,7 @@ export function RegisterServicePage() {
       })
       navigate(`/services/${created.service.id}`)
     } catch (err) {
-      if (err instanceof ApiError && (err.status === 404 || err.status === 501)) {
-        setError(
-          "Registration lands with Phase 3 (POST /api/services). The wizard is ready; retry once that route ships.",
-        )
-      } else {
-        setError(err instanceof ApiError ? err.message : "Could not register service.")
-      }
+      setError(err instanceof ApiError ? err.message : "Could not register service.")
     } finally {
       setSaving(false)
     }
@@ -208,7 +198,8 @@ export function RegisterServicePage() {
             >
               <p className="font-medium">REST API</p>
               <p className="text-sm text-muted-foreground">
-                OpenAPI import arrives with Phase 3.
+                Personal REST APIs are not yet supported; admins register shared REST APIs
+                in Admin services.
               </p>
             </button>
           </CardContent>
@@ -360,8 +351,8 @@ export function RegisterServicePage() {
           <CardHeader>
             <CardTitle>Tools</CardTitle>
             <CardDescription>
-              Pick which tools to expose after the test runs. Without a Phase 3 test, all
-              discovered tools will be exposed once the service syncs.
+              Pick which tools to expose after the test runs. All discovered tools are
+              exposed when no test has run yet; they appear after the first sync.
             </CardDescription>
           </CardHeader>
           <CardContent>
