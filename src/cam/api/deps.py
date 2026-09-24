@@ -1,21 +1,27 @@
 """Request identity for the JSON API.
 
-Dual authentication: a `cam_` bearer token is checked first (works today and
-keeps agent-style tests running), then the dashboard session cookie branch
-when `cam.auth.sessions` is present (lands with the Phase 4 merge). The
-session path is imported lazily so this module works before that merge.
+Dual authentication: a `cam_` bearer token is checked first (agents and
+scripted callers), then the dashboard session cookie. Session helpers come
+from `cam.auth.sessions`; the cookie helpers below are for the auth routes.
 """
 
 from __future__ import annotations
 
-import importlib
 import uuid
 from dataclasses import dataclass
-from typing import Annotated, Any
+from typing import Annotated, cast
 
 from fastapi import Depends, Request, Response
 
 from cam.api.errors import ApiProblem
+from cam.auth.sessions import (
+    CSRF_COOKIE,
+    SESSION_COOKIE,
+    SESSION_IDLE_TIMEOUT_S,
+    issue_session,
+    load_session,
+    session_needs_refresh,
+)
 from cam.connections.tokens import TOKEN_PREFIX, authenticate_token
 from cam.db.models import Org, User
 
@@ -51,21 +57,45 @@ async def _bearer_identity(request: Request) -> SessionIdentity | None:
         return SessionIdentity(user=authed.user, org=org, org_id=authed.org_id)
 
 
-async def _session_cookie_identity(request: Request, response: Response) -> SessionIdentity | None:
-    try:
-        sessions = importlib.import_module("cam.auth.sessions")
-    except ImportError:
-        return None
-    session_cookie: str = sessions.SESSION_COOKIE
-    idle_timeout: int = sessions.SESSION_IDLE_TIMEOUT_S
-    issue_session = sessions.issue_session
-    load_session = sessions.load_session
-    session_needs_refresh = sessions.session_needs_refresh
+def set_auth_cookies(
+    response: Response, request: Request, session_value: str, csrf_token: str
+) -> None:
+    secure = request.url.scheme == "https"
+    response.set_cookie(
+        SESSION_COOKIE,
+        session_value,
+        max_age=SESSION_IDLE_TIMEOUT_S,
+        httponly=True,
+        samesite="lax",
+        secure=secure,
+        path="/",
+    )
+    response.set_cookie(
+        CSRF_COOKIE,
+        csrf_token,
+        max_age=SESSION_IDLE_TIMEOUT_S,
+        httponly=False,
+        samesite="lax",
+        secure=secure,
+        path="/",
+    )
+
+
+def clear_session_cookies(response: Response, request: Request) -> None:
+    secure = request.url.scheme == "https"
+    response.delete_cookie(SESSION_COOKIE, path="/", samesite="lax", secure=secure)
+    response.delete_cookie(CSRF_COOKIE, path="/", samesite="lax", secure=secure)
+
+
+async def load_identity(request: Request, response: Response) -> SessionIdentity | None:
+    header = request.headers.get("authorization") or ""
+    if header:
+        return await _bearer_identity(request)
     settings = request.app.state.settings
-    raw = request.cookies.get(session_cookie)
+    raw = request.cookies.get(SESSION_COOKIE)
     if not raw:
         return None
-    payload: Any = load_session(settings.session_secret, raw, max_age=idle_timeout)
+    payload = load_session(settings.session_secret, raw, max_age=SESSION_IDLE_TIMEOUT_S)
     if payload is None:
         return None
     session_factory = request.app.state.session_factory
@@ -81,22 +111,15 @@ async def _session_cookie_identity(request: Request, response: Response) -> Sess
         if session_needs_refresh(payload):
             fresh = issue_session(settings.session_secret, user_id=user.id, org_id=user.org_id)
             response.set_cookie(
-                session_cookie,
+                SESSION_COOKIE,
                 fresh,
-                max_age=idle_timeout,
+                max_age=SESSION_IDLE_TIMEOUT_S,
                 httponly=True,
                 samesite="lax",
                 secure=request.url.scheme == "https",
                 path="/",
             )
         return SessionIdentity(user=user, org=org, org_id=user.org_id)
-
-
-async def load_identity(request: Request, response: Response) -> SessionIdentity | None:
-    header = request.headers.get("authorization") or ""
-    if header:
-        return await _bearer_identity(request)
-    return await _session_cookie_identity(request, response)
 
 
 async def require_user(request: Request, response: Response) -> SessionIdentity:
@@ -112,3 +135,38 @@ async def require_admin(
     if identity.user.role != "admin":
         raise ApiProblem("FORBIDDEN", "Admin access required.", 403)
     return identity
+
+
+def user_public(user: User) -> dict[str, str]:
+    return {
+        "id": str(user.id),
+        "email": user.email,
+        "handle": user.handle,
+        "display_name": user.display_name,
+        "role": user.role,
+        "kind": user.kind,
+        "status": user.status,
+    }
+
+
+def org_public(org: Org) -> dict[str, object]:
+    settings = org.settings or {}
+    branding = cast("dict[str, object]", settings.get("brand") or {})
+    return {
+        "id": str(org.id),
+        "slug": org.slug,
+        "name": org.name,
+        "settings": {
+            "brand": branding,
+            "instructions": settings.get("instructions", ""),
+            "allowed_email_domains": settings.get("allowed_email_domains", []),
+        },
+    }
+
+
+def me_payload(identity: SessionIdentity, base_url: str) -> dict[str, object]:
+    return {
+        "user": user_public(identity.user),
+        "org": org_public(identity.org),
+        "base_url": base_url,
+    }

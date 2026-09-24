@@ -1,17 +1,19 @@
-"""HTTP helpers for API tests: future-proof CSRF plus bearer auth."""
+"""HTTP helpers for API tests: dual auth (bearer + cookie session via CSRF)."""
 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncGenerator
+import uuid
+from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager
-from typing import Any
+from datetime import datetime
 
 import httpx
 from fastapi import FastAPI
+from sqlalchemy.ext.asyncio import AsyncSession
 
-CSRF_COOKIE = "cam_csrf"
-CSRF_HEADER = "X-CSRF-Token"
+from cam.auth.sessions import CSRF_COOKIE, CSRF_HEADER
+from cam.db.models import AuditLog, User
 
 
 class ApiEnv:
@@ -20,6 +22,15 @@ class ApiEnv:
     def __init__(self, app: FastAPI, client: httpx.AsyncClient) -> None:
         self.app = app
         self.client = client
+
+
+class UserEnv:
+    __slots__ = ("app", "client", "user")
+
+    def __init__(self, app: FastAPI, client: httpx.AsyncClient, user: User) -> None:
+        self.app = app
+        self.client = client
+        self.user = user
 
 
 @asynccontextmanager
@@ -59,22 +70,97 @@ async def api_client(app: FastAPI) -> AsyncGenerator[httpx.AsyncClient]:
             yield client
 
 
-async def ensure_csrf(client: httpx.AsyncClient) -> str | None:
+@asynccontextmanager
+async def user_client(app: FastAPI) -> AsyncGenerator[httpx.AsyncClient]:
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://api.test", timeout=30.0
+    ) as client:
+        yield client
+
+
+async def ensure_csrf(client: httpx.AsyncClient) -> str:
     if client.cookies.get(CSRF_COOKIE) is None:
         await client.get("/api/health")
-    return client.cookies.get(CSRF_COOKIE)
+    token = client.cookies.get(CSRF_COOKIE)
+    assert token is not None
+    return token
 
 
 async def auth_headers(client: httpx.AsyncClient, token: str) -> dict[str, str]:
     headers = {"Authorization": f"Bearer {token}"}
-    csrf = await ensure_csrf(client)
-    if csrf is not None:
-        headers[CSRF_HEADER] = csrf
+    headers[CSRF_HEADER] = await ensure_csrf(client)
     return headers
 
 
 async def post_json(
-    client: httpx.AsyncClient, path: str, body: dict[str, Any], *, token: str
+    client: httpx.AsyncClient,
+    path: str,
+    body: Mapping[str, object] | None = None,
+    *,
+    token: str | None = None,
 ) -> httpx.Response:
-    headers = await auth_headers(client, token)
-    return await client.post(path, json=body, headers=headers)
+    if token is not None:
+        headers = await auth_headers(client, token)
+    else:
+        headers = {CSRF_HEADER: await ensure_csrf(client)}
+    return await client.post(path, json=dict(body) if body is not None else {}, headers=headers)
+
+
+async def mutate_json(
+    client: httpx.AsyncClient,
+    method: str,
+    path: str,
+    body: Mapping[str, object] | None = None,
+) -> httpx.Response:
+    csrf = await ensure_csrf(client)
+    return await client.request(
+        method,
+        path,
+        json=dict(body) if body is not None else {},
+        headers={CSRF_HEADER: csrf},
+    )
+
+
+async def login(
+    client: httpx.AsyncClient, email: str, password: str, *, token: str | None = None
+) -> httpx.Response:
+    if token is not None:
+        headers = await auth_headers(client, token)
+    else:
+        headers = {CSRF_HEADER: await ensure_csrf(client)}
+    return await client.post(
+        "/api/auth/login", json={"email": email, "password": password}, headers=headers
+    )
+
+
+async def insert_audit(
+    db: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    user_id: uuid.UUID | None = None,
+    owner_user_id: uuid.UUID | None = None,
+    service_id: uuid.UUID | None = None,
+    token_id: uuid.UUID | None = None,
+    agent_name: str | None = None,
+    action: str = "invoke",
+    status: str = "ok",
+    args: dict[str, object] | None = None,
+    ts: datetime | None = None,
+) -> AuditLog:
+    row = AuditLog(
+        org_id=org_id,
+        user_id=user_id,
+        owner_user_id=owner_user_id,
+        service_id=service_id,
+        token_id=token_id,
+        agent_name=agent_name,
+        action=action,
+        status=status,
+        args=args,
+    )
+    if ts is not None:
+        row.ts = ts
+    db.add(row)
+    await db.flush()
+    return row

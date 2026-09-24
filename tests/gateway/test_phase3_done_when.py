@@ -86,10 +86,25 @@ async def _running_app(app: FastAPI) -> AsyncGenerator[httpx.AsyncClient]:
     await task
 
 
+async def _fetch_csrf(api: httpx.AsyncClient) -> str:
+    api.cookies.jar.clear()
+    await api.get("/api/health")
+    values = [cookie.value for cookie in api.cookies.jar if cookie.name == "cam_csrf"]
+    assert values, "no CSRF cookie issued"
+    value = values[-1]
+    assert value is not None
+    return value
+
+
 async def _connect_template(
     api: httpx.AsyncClient, token: str, connect_path: str, *, as_user: str
 ) -> None:
-    connect = await api.post(connect_path, json={}, headers={"Authorization": f"Bearer {token}"})
+    csrf = await _fetch_csrf(api)
+    connect = await api.post(
+        connect_path,
+        json={},
+        headers={"Authorization": f"Bearer {token}", "X-CSRF-Token": csrf},
+    )
     assert connect.status_code == 200, connect.text
     authorize_url = connect.json()["authorize_url"]
     sep = "&" if "?" in authorize_url else "?"

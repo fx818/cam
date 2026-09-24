@@ -11,7 +11,7 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.helpers import ApiEnv, post_json
+from api.helpers import ApiEnv, ensure_csrf, post_json
 from cam.config import Settings
 from cam.db.models import Connection, OAuthState, Service
 from fixtures.mock_oauth import MockOAuthHandle
@@ -95,7 +95,10 @@ async def test_connect_requires_credential_for_secret_types(api: ApiEnv, user_to
 
 
 async def test_connect_requires_auth(api: ApiEnv) -> None:
-    response = await api.client.post("/api/services/global/nope/connect", json={})
+    csrf = await ensure_csrf(api.client)
+    response = await api.client.post(
+        "/api/services/global/nope/connect", json={}, headers={"X-CSRF-Token": csrf}
+    )
     assert response.status_code == 401
 
 

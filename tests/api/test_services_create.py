@@ -7,7 +7,7 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.helpers import ApiEnv, post_json
+from api.helpers import ApiEnv, ensure_csrf, post_json
 from cam.db.models import Connection, Service, User
 from fixtures.mock_mcp import MockMCPHandle
 from fixtures.mock_rest import MockRestHandle
@@ -44,7 +44,12 @@ async def test_create_personal_mcp_service(api: ApiEnv, user_token: str, api_use
 
 
 async def test_create_service_requires_auth(api: ApiEnv) -> None:
-    response = await api.client.post("/api/services", json=_mcp_body("https://x.example/mcp"))
+    csrf = await ensure_csrf(api.client)
+    response = await api.client.post(
+        "/api/services",
+        json=_mcp_body("https://x.example/mcp"),
+        headers={"X-CSRF-Token": csrf},
+    )
     assert response.status_code == 401
     assert response.json()["error"]["code"] == "UNAUTHORIZED"
 
