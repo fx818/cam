@@ -45,7 +45,7 @@ async def _make_global_service(db_session: AsyncSession, slug: str) -> Service:
         db_session,
         slug=slug,
         name=slug,
-        url="https://vis.example.com/mcp",
+        url="https://example.com/mcp",
         transport="streamable-http",
         auth_type="none",
     )
@@ -158,7 +158,7 @@ async def test_visibility_rows_do_not_grant_personal_access(db_session: AsyncSes
         owner_user_id=identity_a.user.id,
         slug=_unique("mine"),
         name="Mine",
-        url="https://mine.example.com/mcp",
+        url="https://example.com/mcp",
         transport="streamable-http",
         visibility="all",
     )

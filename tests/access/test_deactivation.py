@@ -72,7 +72,7 @@ def _unique(prefix: str) -> str:
 
 
 async def _personal_service(
-    db_session: AsyncSession, owner: User, *, url: str = "https://owned.example.com/mcp"
+    db_session: AsyncSession, owner: User, *, url: str = "https://example.com/mcp"
 ) -> tuple[Service, Connection]:
     return await register_personal_mcp(
         db_session,

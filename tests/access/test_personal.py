@@ -62,7 +62,7 @@ async def _register(
         owner=owner,
         slug=slug or _unique("mine"),
         name="My MCP",
-        url="https://mine.example.com/mcp",
+        url="https://example.com/mcp",
         transport="streamable-http",
         auth_type="bearer" if credential else "none",
         credential=credential,
@@ -255,7 +255,7 @@ async def test_duplicate_personal_slug_rules(db_session: AsyncSession) -> None:
         db_session,
         slug=slug,
         name="Global Same",
-        url="https://same.example.com/mcp",
+        url="https://example.com/mcp",
         transport="streamable-http",
         auth_type="none",
     )
@@ -308,6 +308,29 @@ async def test_personal_registration_allowlist_exempts_loopback(
     assert connection.user_id == identity.user.id
 
 
+async def test_personal_registration_resolves_dns_and_rejects_blocked_ip(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    identity = await _make_identity(db_session, uuid.uuid4().hex[:8] + "dns")
+
+    async def _blocked(url: str, *, policy: object, resolver: object = None) -> object:
+        from cam.upstream.url import UrlPolicyError
+
+        raise UrlPolicyError("URL host 'sneaky.example.com' resolves to blocked address")
+
+    monkeypatch.setattr("cam.registry.services.validate_outbound_url", _blocked)
+    with pytest.raises(ServiceError, match="blocked address"):
+        await register_personal_mcp(
+            db_session,
+            owner=identity.user,
+            slug=_unique("dns"),
+            name="Sneaky",
+            url="https://example.com/mcp",
+            transport="streamable-http",
+            auth_type="none",
+        )
+
+
 async def test_personal_slug_reserved_by_template_service(db_session: AsyncSession) -> None:
     identity = await _make_identity(db_session, uuid.uuid4().hex[:8] + "r")
     slug = _unique("reserved")
@@ -318,7 +341,7 @@ async def test_personal_slug_reserved_by_template_service(db_session: AsyncSessi
             owner_user_id=None,
             slug=slug,
             name="Template",
-            url="https://template.example.com/mcp",
+            url="https://example.com/mcp",
             transport="streamable-http",
         )
     )

@@ -11,7 +11,7 @@ from cam.connections.crypto import MasterKeyRing, encrypt_secret, get_default_ke
 from cam.connections.orgs import ensure_org, get_org_data_key
 from cam.connections.url_policy import load_url_allowlist
 from cam.db.models import Connection, Service, ServiceVisibility, User
-from cam.upstream.url import admit_url
+from cam.upstream.url import UrlPolicy, admit_url, validate_outbound_url
 
 McpTransport = Literal["streamable-http", "sse"]
 McpAuthType = Literal["none", "static-header", "bearer"]
@@ -189,6 +189,13 @@ async def register_personal_mcp(
         restricted=True,
         allowlist=allowlist,
     )
+    try:
+        await validate_outbound_url(
+            resolved_url,
+            policy=UrlPolicy(restricted=True, allowlist=allowlist),
+        )
+    except ValueError as exc:
+        raise ServiceError(str(exc)) from exc
 
     key_ring = ring if ring is not None else get_default_key_ring()
     existing = await session.execute(

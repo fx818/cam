@@ -58,7 +58,7 @@ async def _personal_service(
         owner=owner,
         slug=slug or _unique("svc"),
         name="Shared MCP",
-        url="https://shared.example.com/mcp",
+        url="https://example.com/mcp",
         transport="streamable-http",
         auth_type="none",
     )
@@ -257,7 +257,7 @@ async def test_global_org_connection_cannot_be_shared(db_session: AsyncSession) 
         db_session,
         slug=_unique("unshareable"),
         name="Unshareable",
-        url="https://unshareable.example.com/mcp",
+        url="https://example.com/mcp",
         transport="streamable-http",
         auth_type="none",
     )
