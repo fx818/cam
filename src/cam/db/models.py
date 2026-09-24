@@ -259,6 +259,33 @@ class ServiceVisibility(Base):
     )
 
 
+class Share(Base):
+    __tablename__ = "shares"
+    __table_args__ = (
+        Index(
+            "uq_shares_active_connection_grantee",
+            "connection_id",
+            "grantee_user_id",
+            unique=True,
+            postgresql_where=text("revoked_at IS NULL"),
+        ),
+        Index("ix_shares_org_id", "org_id"),
+        Index("ix_shares_connection_id", "connection_id"),
+        Index("ix_shares_grantee_user_id", "grantee_user_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    org_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("orgs.id"), nullable=False)
+    connection_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("connections.id"), nullable=False
+    )
+    grantee_user_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class AuditLog(Base):
     __tablename__ = "audit_logs"
     __table_args__ = (

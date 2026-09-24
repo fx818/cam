@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from cam.audit.writer import AuditRef
 from cam.connections.tokens import AuthenticatedIdentity
-from cam.db.models import Connection, Service, ServiceVisibility, Tool, User
+from cam.db.models import Connection, Service, ServiceVisibility, Share, Tool, User
 
 GLOBAL_OWNER = "global"
 
@@ -97,7 +97,20 @@ async def has_access(
     if service.org_id != identity.org_id:
         return False
     if service.tier == "personal":
-        return service.owner_user_id == identity.user.id
+        if service.owner_user_id == identity.user.id:
+            return True
+        result = await session.execute(
+            select(Share.id)
+            .join(Connection, Share.connection_id == Connection.id)
+            .where(
+                Share.org_id == identity.org_id,
+                Connection.service_id == service.id,
+                Connection.user_id == service.owner_user_id,
+                Share.grantee_user_id == identity.user.id,
+                Share.revoked_at.is_(None),
+            )
+        )
+        return result.first() is not None
     if service.visibility == "all":
         return True
     result = await session.execute(
@@ -179,7 +192,11 @@ async def list_services(
             description=service.description,
             tier=service.tier,
             owner=owner_handle if service.tier == "personal" else None,
-            shared_by=None,
+            shared_by=(
+                owner_handle
+                if service.tier == "personal" and service.owner_user_id != identity.user.id
+                else None
+            ),
             health=service.health,
             tool_count=tool_count,
         )

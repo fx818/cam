@@ -7,6 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cam import __version__
+from cam.access.shares import ShareError, share_service, unshare_service
 from cam.accounts.users import (
     UserError,
     UserKind,
@@ -354,6 +355,44 @@ def revoke_service_visibility_cmd(slug: str, user_email: str) -> None:
         except ServiceError as exc:
             raise click.ClickException(str(exc)) from exc
         click.echo(f"Revoked {user_email} access to global/{service.slug}")
+
+    asyncio.run(_with_session(_apply))
+
+
+@main.command("share-service")
+@click.option("--service", "ref", required=True, help="Service id: <handle>/<slug>.")
+@click.option("--owner", "owner_email", required=True, help="Email of the service owner.")
+@click.option("--user", "grantee_email", required=True, help="Email of the user to share with.")
+def share_service_cmd(ref: str, owner_email: str, grantee_email: str) -> None:
+    """Share an owner's personal service with another user."""
+
+    async def _apply(session: AsyncSession) -> None:
+        try:
+            share = await share_service(
+                session, ref=ref, owner_email=owner_email, grantee_email=grantee_email
+            )
+        except ShareError as exc:
+            raise click.ClickException(str(exc)) from exc
+        click.echo(f"Shared {ref} with {grantee_email} (share {share.id})")
+
+    asyncio.run(_with_session(_apply))
+
+
+@main.command("unshare-service")
+@click.option("--service", "ref", required=True, help="Service id: <handle>/<slug>.")
+@click.option("--owner", "owner_email", required=True, help="Email of the service owner.")
+@click.option("--user", "grantee_email", required=True, help="Email of the user to unshare.")
+def unshare_service_cmd(ref: str, owner_email: str, grantee_email: str) -> None:
+    """Revoke a share on an owner's personal service."""
+
+    async def _apply(session: AsyncSession) -> None:
+        try:
+            share = await unshare_service(
+                session, ref=ref, owner_email=owner_email, grantee_email=grantee_email
+            )
+        except ShareError as exc:
+            raise click.ClickException(str(exc)) from exc
+        click.echo(f"Revoked share {share.id} on {ref} for {grantee_email}")
 
     asyncio.run(_with_session(_apply))
 

@@ -476,6 +476,73 @@ def test_register_personal_mcp_and_status_cli_commands() -> None:
     assert "already registered" in duplicate.output
 
 
+def test_share_and_unshare_service_cli_commands() -> None:
+    owner_email = f"{_unique('shareowner')}@example.com"
+    grantee_email = f"{_unique('sharegrantee')}@example.com"
+    runner = CliRunner()
+    assert (
+        runner.invoke(
+            main, ["create-user", "--email", owner_email, "--password", "pw-own-12345"]
+        ).exit_code
+        == 0
+    )
+    assert (
+        runner.invoke(
+            main, ["create-user", "--email", grantee_email, "--password", "pw-gr-12345"]
+        ).exit_code
+        == 0
+    )
+    owner_handle = owner_email.split("@")[0].lower()
+    slug = _unique("sharedsvc")
+    registered = runner.invoke(
+        main,
+        [
+            "register-personal-mcp",
+            "--email",
+            owner_email,
+            "--slug",
+            slug,
+            "--name",
+            "Shareable",
+            "--url",
+            "https://shareable.example.com/mcp",
+            "--transport",
+            "streamable-http",
+            "--auth-type",
+            "none",
+        ],
+    )
+    assert registered.exit_code == 0, registered.output
+    ref = f"{owner_handle}/{slug}"
+
+    shared = runner.invoke(
+        main,
+        ["share-service", "--service", ref, "--owner", owner_email, "--user", grantee_email],
+    )
+    assert shared.exit_code == 0, shared.output
+    assert grantee_email in shared.output
+
+    duplicate = runner.invoke(
+        main,
+        ["share-service", "--service", ref, "--owner", owner_email, "--user", grantee_email],
+    )
+    assert duplicate.exit_code == 1
+    assert "already shared" in duplicate.output
+
+    revoked = runner.invoke(
+        main,
+        ["unshare-service", "--service", ref, "--owner", owner_email, "--user", grantee_email],
+    )
+    assert revoked.exit_code == 0, revoked.output
+
+    again = runner.invoke(
+        main,
+        ["unshare-service", "--service", ref, "--owner", owner_email, "--user", grantee_email],
+    )
+    assert again.exit_code == 1
+    assert "not shared" in again.output
+
+
 def test_register_personal_mcp_unknown_email_fails() -> None:
     result = CliRunner().invoke(
         main,

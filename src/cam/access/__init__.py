@@ -17,6 +17,15 @@ from cam.access.resolution import (
     service_ref,
     tool_ref,
 )
+from cam.access.shares import (
+    ShareError,
+    active_share,
+    add_share,
+    list_shares,
+    revoke_share,
+    share_service,
+    unshare_service,
+)
 
 __all__ = [
     "GLOBAL_OWNER",
@@ -26,7 +35,11 @@ __all__ = [
     "ServiceDisabled",
     "ServiceNotFound",
     "ServiceSummary",
+    "ShareError",
+    "active_share",
+    "add_share",
     "list_services",
+    "list_shares",
     "list_tools",
     "parse_service_ref",
     "parse_tool_id",
@@ -35,6 +48,9 @@ __all__ = [
     "resolve_org_connection",
     "resolve_service",
     "resolve_tool",
+    "revoke_share",
     "service_ref",
+    "share_service",
     "tool_ref",
+    "unshare_service",
 ]
