@@ -697,7 +697,7 @@ An end-to-end slice with no dashboard; admin tasks use a CLI.
 - [x] 6.1 Tables: `skills`, `skill_versions`, `skill_files`, `skill_requires`, visibility and shares
 - [x] 6.2 Upload: zip or folder, text files only, SKILL.md checks, size and count limits
 - [x] 6.3 Dashboard: browse, edit with preview, history, diff, rollback, sharing with author shown
-- [ ] 6.4 `cam` actions: `list_skills`, `load_skill`, `read_skill_file`; unavailable marking; skills in the per-user description
+- [x] 6.4 `cam` actions: `list_skills`, `load_skill`, `read_skill_file`; unavailable marking; skills in the per-user description
 - [x] 6.5 Skill loads logged with the version
 
 **Done when:** a global PNS skill loads in Claude Code and guides it to `global/pns/run_query`, and a user without PNS access sees it marked unavailable.
