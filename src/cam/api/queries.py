@@ -13,7 +13,6 @@ from cam.access.shares import ShareError, add_share, list_shares, revoke_share
 from cam.accounts.users import UserError, get_user_by_email
 from cam.api.deps import SessionIdentity
 from cam.api.pagination import decode_cursor, encode_cursor
-from cam.connections.orgs import encrypt_for_org
 from cam.connections.tokens import AuthenticatedIdentity, create_token
 from cam.connections.url_policy import AllowlistError, normalize_pattern
 from cam.db.models import (
@@ -474,18 +473,6 @@ async def get_owned_connection(
         return connection
     if connection.user_id != identity.user.id and identity.user.role != "admin":
         raise ServiceNotFound(str(connection_id))
-    return connection
-
-
-async def rotate_connection_secret(
-    session: AsyncSession, connection: Connection, *, secret: str
-) -> Connection:
-    enc, key_version = await encrypt_for_org(session, connection.org_id, secret)
-    connection.secret_enc = enc
-    connection.key_version = key_version
-    connection.status = "connected"
-    connection.expires_at = None
-    await session.flush()
     return connection
 
 

@@ -15,9 +15,9 @@ from cam.api.queries import (
     get_owned_connection,
     list_connection_shares,
     revoke_share_by_id,
-    rotate_connection_secret,
     share_public,
 )
+from cam.connections.rotation import RotationError, rotate_connection_secret
 from cam.db.models import User
 
 router = APIRouter(prefix="/api", tags=["connections", "shares"])
@@ -51,9 +51,10 @@ async def rotate_connection(
         except ServiceNotFound:
             raise ApiProblem("NOT_FOUND", "Connection not found.", 404) from None
         secret = body.secret.strip()
-        if not secret:
-            raise ApiProblem("VALIDATION_ERROR", "secret must not be empty", 422)
-        await rotate_connection_secret(db, connection, secret=secret)
+        try:
+            await rotate_connection_secret(db, connection, secret=secret)
+        except RotationError as exc:
+            raise ApiProblem("VALIDATION_ERROR", str(exc), 422) from None
         await db.commit()
     pool = request.app.state.pool
     await pool.invalidate_connection(str(connection.service_id), str(connection.id))
