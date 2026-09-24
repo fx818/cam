@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -25,6 +26,7 @@ from cam.access import (
     resolve_tool,
 )
 from cam.access.credentials import CredentialError, resolve_credential_headers
+from cam.audit.writer import AuditEvent, AuditRef, AuditWriter
 from cam.config import Settings
 from cam.connections.tokens import AuthenticatedIdentity
 from cam.db.models import Tool
@@ -63,6 +65,7 @@ class CamResult:
     structured: dict[str, Any] | None = None
     is_error: bool = False
     truncated: bool = False
+    audit_ref: AuditRef | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,17 +74,24 @@ class GatewayDeps:
     pool: SessionPool
     settings: Settings
     rate_limiter: RateLimiter
+    audit: AuditWriter
 
 
 def error_result(exc: CamError) -> CamResult:
-    return CamResult(content=(TextBlock(text=exc.as_json()),), structured=None, is_error=True)
+    return CamResult(
+        content=(TextBlock(text=exc.as_json()),),
+        structured=None,
+        is_error=True,
+        audit_ref=exc.audit_ref,
+    )
 
 
-def payload_result(payload: dict[str, Any]) -> CamResult:
+def payload_result(payload: dict[str, Any], audit_ref: AuditRef | None = None) -> CamResult:
     return CamResult(
         content=(TextBlock(text=json.dumps(payload)),),
         structured=payload,
         is_error=False,
+        audit_ref=audit_ref,
     )
 
 
@@ -126,11 +136,11 @@ async def _list_services(deps: GatewayDeps, identity: AuthenticatedIdentity) -> 
 
 async def _list_tools(
     deps: GatewayDeps, identity: AuthenticatedIdentity, service: Any
-) -> dict[str, Any]:
+) -> CamResult:
     ref = _require_str(service, "service")
     async with deps.session_factory() as session:
         resolved_service, tools = await list_tools(session, identity, ref)
-    return {
+    payload = {
         "service": f"global/{resolved_service.slug}",
         "tools": [
             {
@@ -140,19 +150,22 @@ async def _list_tools(
             for tool in tools
         ],
     }
+    return payload_result(payload, AuditRef(service_id=resolved_service.id))
 
 
-async def _describe(
-    deps: GatewayDeps, identity: AuthenticatedIdentity, tool_id: Any
-) -> dict[str, Any]:
+async def _describe(deps: GatewayDeps, identity: AuthenticatedIdentity, tool_id: Any) -> CamResult:
     raw_id = _require_str(tool_id, "id")
     async with deps.session_factory() as session:
         resolved = await resolve_tool(session, identity, raw_id)
-    return {
+    payload = {
         "id": resolved.id,
         "description": _tool_description(resolved.tool),
         "input_schema": resolved.tool.input_schema or {},
     }
+    return payload_result(
+        payload,
+        AuditRef(service_id=resolved.service.id, tool_name=resolved.tool.name),
+    )
 
 
 async def _invoke(
@@ -172,6 +185,11 @@ async def _invoke(
     async with deps.session_factory() as session:
         resolved: ResolvedTool = await resolve_tool(session, identity, raw_id)
         connection = await resolve_org_connection(session, resolved.service)
+        audit_ref = AuditRef(
+            service_id=resolved.service.id,
+            connection_id=connection.id,
+            tool_name=resolved.tool.name,
+        )
         try:
             headers = await resolve_credential_headers(
                 session, service=resolved.service, connection=connection
@@ -181,8 +199,13 @@ async def _invoke(
                 CamErrorCode.UPSTREAM_AUTH,
                 "Credential rejected. Owner needs to reconnect.",
                 service=f"global/{resolved.service.slug}",
+                audit_ref=audit_ref,
             ) from exc
-        validate_args(resolved.tool.input_schema, call_args)
+        try:
+            validate_args(resolved.tool.input_schema, call_args)
+        except CamError as exc:
+            exc.audit_ref = audit_ref
+            raise
 
     service = resolved.service
     ref = f"global/{service.slug}"
@@ -202,7 +225,9 @@ async def _invoke(
             resolved.tool.upstream_name, call_args, timeout_s=service.timeout_ms / 1000
         )
     except UpstreamError as exc:
-        raise map_upstream_error(exc, service_ref=ref, service_name=service.name) from exc
+        raise map_upstream_error(
+            exc, service_ref=ref, service_name=service.name, audit_ref=audit_ref
+        ) from exc
     if outcome.is_error:
         upstream_text = "".join(
             block.text for block in outcome.content if isinstance(block, TextBlock)
@@ -211,10 +236,15 @@ async def _invoke(
             CamErrorCode.UPSTREAM_ERROR,
             upstream_text or f"{service.name} returned an error.",
             service=ref,
+            audit_ref=audit_ref,
         )
     content, truncated = truncate_blocks(outcome.content, service.response_cap_tokens)
     return CamResult(
-        content=content, structured=outcome.structured, is_error=False, truncated=truncated
+        content=content,
+        structured=outcome.structured,
+        is_error=False,
+        truncated=truncated,
+        audit_ref=audit_ref,
     )
 
 
@@ -262,7 +292,15 @@ async def handle(
     args: Any = None,
     path: Any = None,
 ) -> CamResult:
-    del agent, path
+    del path
+    started = time.monotonic()
+    captured_args: dict[str, Any] | None = None
+    if action == "invoke":
+        if args is None:
+            captured_args = {}
+        elif isinstance(args, dict):
+            captured_args = dict(cast("dict[str, Any]", args))
+    cam_error: CamError | None = None
     try:
         outcome = await _dispatch(
             deps,
@@ -273,14 +311,42 @@ async def handle(
             args=args,
         )
     except CamError as exc:
-        return error_result(exc)
+        cam_error = exc
+        result = error_result(exc)
     except ServiceNotFound:
-        return error_result(not_found())
+        cam_error = not_found()
+        result = error_result(cam_error)
     except ServiceDisabled as exc:
-        return error_result(service_disabled(str(exc) or None))
+        cam_error = service_disabled(str(exc) or None)
+        cam_error.audit_ref = exc.audit_ref
+        result = error_result(cam_error)
     except Exception:
         logger.exception("cam action failed")
-        return error_result(internal())
-    if isinstance(outcome, CamResult):
-        return outcome
-    return payload_result(outcome)
+        cam_error = internal()
+        result = error_result(cam_error)
+    else:
+        result = outcome if isinstance(outcome, CamResult) else payload_result(outcome)
+
+    latency_ms = int((time.monotonic() - started) * 1000)
+    response_bytes = sum(
+        len(block.text.encode("utf-8")) if isinstance(block, TextBlock) else len(block.data)
+        for block in result.content
+    )
+    audit_ref = result.audit_ref
+    event = AuditEvent(
+        org_id=identity.org_id,
+        user_id=identity.user.id,
+        token_id=identity.token.id,
+        agent_name=agent.name,
+        agent_version=agent.version,
+        action=action if isinstance(action, str) else "unknown",
+        args=captured_args,
+        status="error" if result.is_error else "ok",
+        error_code=str(cam_error.code) if cam_error is not None else None,
+        error_message=cam_error.message if cam_error is not None else None,
+        latency_ms=latency_ms,
+        response_bytes=response_bytes,
+        truncated=result.truncated,
+    ).from_ref(audit_ref)
+    deps.audit.record(event)
+    return result

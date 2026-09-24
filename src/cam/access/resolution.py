@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from cam.audit.writer import AuditRef
 from cam.connections.tokens import AuthenticatedIdentity
 from cam.db.models import Connection, Service, ServiceVisibility, Tool
 
@@ -24,6 +25,10 @@ class ServiceNotFound(Exception):
 
 class ServiceDisabled(Exception):
     """The service exists and the caller may reach it, but it is not active."""
+
+    def __init__(self, ref: str, *, audit_ref: AuditRef | None = None) -> None:
+        super().__init__(ref)
+        self.audit_ref = audit_ref
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,7 +155,7 @@ async def resolve_service(
     if not await _has_access(session, identity, service):
         raise ServiceNotFound(ref)
     if service.status != "active":
-        raise ServiceDisabled(ref)
+        raise ServiceDisabled(ref, audit_ref=AuditRef(service_id=service.id))
     return service
 
 
@@ -189,7 +194,7 @@ async def resolve_tool(
     if not await _has_access(session, identity, service):
         raise ServiceNotFound(tool_id)
     if service.status != "active":
-        raise ServiceDisabled(tool_id)
+        raise ServiceDisabled(tool_id, audit_ref=AuditRef(service_id=service.id))
     tool_result = await session.execute(
         select(Tool).where(Tool.service_id == service.id, Tool.name == name)
     )
@@ -209,5 +214,5 @@ async def resolve_org_connection(session: AsyncSession, service: Service) -> Con
     )
     connection = result.scalar_one_or_none()
     if connection is None or connection.status != "connected":
-        raise ServiceDisabled(service_ref(service))
+        raise ServiceDisabled(service_ref(service), audit_ref=AuditRef(service_id=service.id))
     return connection

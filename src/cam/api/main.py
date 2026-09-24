@@ -9,6 +9,7 @@ from starlette.routing import Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from cam.api.routes.health import router as health_router
+from cam.audit.writer import AuditWriter
 from cam.config import Settings
 from cam.db.session import create_db_engine, create_session_factory
 from cam.gateway.auth import BearerAuthMiddleware
@@ -48,11 +49,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     engine = create_db_engine(cfg.database_url)
     session_factory = create_session_factory(engine)
     pool = SessionPool(settings=cfg)
+    audit = AuditWriter(session_factory)
     deps = GatewayDeps(
         session_factory=session_factory,
         pool=pool,
         settings=cfg,
         rate_limiter=RateLimiter(cfg.rate_limit_per_min),
+        audit=audit,
     )
     gateway = GatewayMount()
 
@@ -64,6 +67,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.session_factory = session_factory
         app.state.pool = pool
         app.state.deps = deps
+        app.state.audit = audit
         instructions = await load_server_instructions(session_factory)
         server = create_mcp_server(deps, instructions=instructions)
         _ = server.streamable_http_app(
@@ -75,9 +79,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         app.state.mcp_server = server
         try:
+            await audit.start()
             async with server.session_manager.run():
                 yield
         finally:
+            await audit.aclose()
             await pool.aclose()
             await engine.dispose()
 

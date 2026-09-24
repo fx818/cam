@@ -10,6 +10,7 @@ import json
 from enum import StrEnum
 from typing import Any
 
+from cam.audit.writer import AuditRef
 from cam.upstream.errors import UpstreamError
 
 
@@ -48,12 +49,14 @@ class CamError(Exception):
         *,
         service: str | None = None,
         retryable: bool | None = None,
+        audit_ref: AuditRef | None = None,
     ) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
         self.service = service
         self.retryable = code in _RETRYABLE_CODES if retryable is None else retryable
+        self.audit_ref = audit_ref
 
     def envelope(self) -> dict[str, Any]:
         return {
@@ -89,7 +92,13 @@ def skills_unavailable() -> CamError:
     return CamError(CamErrorCode.INTERNAL, "Skills are not yet available in this CAM build.")
 
 
-def map_upstream_error(exc: UpstreamError, *, service_ref: str, service_name: str) -> CamError:
+def map_upstream_error(
+    exc: UpstreamError,
+    *,
+    service_ref: str,
+    service_name: str,
+    audit_ref: AuditRef | None = None,
+) -> CamError:
     code = CamErrorCode(exc.code.value)
     if code is CamErrorCode.TIMEOUT or code is CamErrorCode.UPSTREAM_UNAVAILABLE:
         message = f"{service_name} is unavailable or timed out."
@@ -101,4 +110,4 @@ def map_upstream_error(exc: UpstreamError, *, service_ref: str, service_name: st
         message = exc.message or f"{service_name} returned an error."
     else:
         message = "Internal CAM error."
-    return CamError(code, message, service=service_ref)
+    return CamError(code, message, service=service_ref, audit_ref=audit_ref)
