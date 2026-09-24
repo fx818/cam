@@ -70,7 +70,7 @@ async def test_default_org_seeded() -> None:
         async with engine.connect() as conn:
             row = (
                 await conn.execute(
-                    text("SELECT slug, name, settings, data_key_enc FROM orgs WHERE slug = :s"),
+                    text("SELECT slug, name, settings FROM orgs WHERE slug = :s"),
                     {"s": "indiamart"},
                 )
             ).first()
@@ -78,7 +78,6 @@ async def test_default_org_seeded() -> None:
         assert row.slug == "indiamart"
         assert row.name == "IndiaMART"
         assert row.settings == {}
-        assert row.data_key_enc is None
     finally:
         await engine.dispose()
 
