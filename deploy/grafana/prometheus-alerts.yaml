@@ -1,0 +1,59 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: cam-alerts
+  namespace: cam
+  labels:
+    app.kubernetes.io/name: cam
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: cam
+      rules:
+        - alert: CamHighErrorRate
+          expr: |
+            (sum(rate(cam_http_requests_total{status=~"5..|exception"}[5m]))
+              / sum(rate(cam_http_requests_total[5m]))) > 0.05
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "CAM 5xx rate above 5% for 5m"
+            runbook_url: https://github.com/REPO/cam/blob/main/deploy/gke/README.md
+        - alert: CamServicesFailing
+          expr: |
+            cam_services_by_health{health=~"failing|needs_reconnect"} > 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "CAM has failing or needs-reconnect services ({{ $value }})"
+            description: "Periodic health checks or invocations marked services {{ $labels.health }} for 10m."
+        - alert: CamAuditQueueBacklog
+          expr: cam_audit_queue_depth > 900
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Audit writer queue near capacity ({{ $value }})"
+            description: "Adjacent fullness drops events from the audit log; investigate DB or alert writer failure."
+        - alert: CamAuditEventsDropped
+          expr: increase(cam_audit_events_dropped_total[15m]) > 0
+          labels:
+            severity: critical
+          annotations:
+            summary: "CAM dropped audit events in the last 15m"
+        - alert: CamSchedulerJobStalled
+          expr: |
+            time() - max by (job) (cam_scheduler_job_last_run_timestamp_seconds) > 1800
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Background job {{ $labels.job }} has not completed for >30m"
+        - alert: CamJobFailures
+          expr: increase(cam_scheduler_job_errors_total[30m]) > 3
+          labels:
+            severity: warning
+          annotations:
+            summary: "Background job {{ $labels.job }} failing repeatedly"

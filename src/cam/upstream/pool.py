@@ -91,6 +91,9 @@ class SessionPool:
         if entry is not None:
             await entry.session.aclose()
 
+    def active_count(self) -> int:
+        return sum(1 for entry in self._entries.values() if not entry.session.closed)
+
     async def reap_idle(self) -> int:
         """Close sessions idle past the timeout. Returns how many were closed."""
         now = time.monotonic()

@@ -16,6 +16,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from cam.api.metrics import AUDIT_DROPPED, AUDIT_WRITTEN
 from cam.db.models import AuditLog
 
 logger = logging.getLogger(__name__)
@@ -122,6 +123,12 @@ class AuditWriter:
         if self._task is None and not self._closed:
             self._task = asyncio.create_task(self._run(), name="cam-audit-writer")
 
+    def queue_depth(self) -> int:
+        return self._queue.qsize()
+
+    def queue_capacity(self) -> int:
+        return self._queue.maxsize
+
     def record(self, event: AuditEvent) -> bool:
         if self._closed:
             return False
@@ -130,6 +137,7 @@ class AuditWriter:
             return True
         except asyncio.QueueFull:
             logger.warning("audit queue full; dropping %s event", event.action)
+            AUDIT_DROPPED.inc()
             return False
 
     async def flush(self) -> None:
@@ -162,6 +170,8 @@ class AuditWriter:
                     break
             try:
                 await self._write(batch)
+                for event in batch:
+                    AUDIT_WRITTEN.labels(event.action, event.status).inc()
             finally:
                 for _ in batch:
                     self._queue.task_done()

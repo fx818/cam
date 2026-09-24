@@ -18,6 +18,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from cam.access.credentials import CredentialError, CredentialExpiredError, resolve_credential
+from cam.api.metrics import set_service_health_counts
 from cam.connections.url_policy import load_url_policy
 from cam.db.models import Connection, Service
 from cam.upstream import ConnectionTarget
@@ -151,6 +152,10 @@ async def run_health_checks(session_factory: async_sessionmaker[AsyncSession]) -
     outcomes.extend(results)
     for service_id, connection_id in plan.expired:
         outcomes.append(ProbeOutcome(service_id, connection_id, CREDENTIAL_EXPIRED))
+    counts: dict[str, int] = {}
+    for outcome in outcomes:
+        counts[outcome.health] = counts.get(outcome.health, 0) + 1
+    set_service_health_counts(counts)
     await _announce(session_factory, outcomes)
     return len(outcomes)
 

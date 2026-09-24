@@ -1,5 +1,6 @@
 import logging
-from collections.abc import AsyncGenerator, Callable
+import time
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from cam.api.csrf import CsrfMiddleware
 from cam.api.errors import install_error_handlers
+from cam.api.metrics import SCHEDULER_JOB_ERRORS, SCHEDULER_JOB_LAST_RUN, RequestMetricsMiddleware
 from cam.api.routes.admin_overview import router as admin_overview_router
 from cam.api.routes.admin_review_queue import router as admin_review_queue_router
 from cam.api.routes.admin_services import router as admin_services_router
@@ -24,6 +26,7 @@ from cam.api.routes.auth import router as auth_router
 from cam.api.routes.connect import router as connect_router
 from cam.api.routes.connections import router as connections_router
 from cam.api.routes.health import router as health_router
+from cam.api.routes.metrics import router as metrics_router
 from cam.api.routes.services import router as services_router
 from cam.api.routes.services_create import router as services_create_router
 from cam.api.routes.skills import router as skills_router
@@ -87,11 +90,31 @@ class GatewayMount:
 WEB_DIST = Path(__file__).resolve().parents[3] / "web" / "dist"
 
 
-async def _safe_job(coroutine_factory: Any) -> None:
-    try:
-        await coroutine_factory
-    except Exception:
-        logging.getLogger(__name__).exception("background job failed")
+def instrumented_job(name: str, fn: Callable[[], Awaitable[Any]]) -> Callable[[], Awaitable[None]]:
+    async def run() -> None:
+        try:
+            await fn()
+        except Exception:
+            SCHEDULER_JOB_ERRORS.labels(name).inc()
+            logging.getLogger(__name__).exception("background job %s failed", name)
+        finally:
+            SCHEDULER_JOB_LAST_RUN.labels(name).set(time.time())
+
+    return run
+
+
+def instrumented_jobs(cfg: Settings, session_factory: Any) -> dict[str, Callable[[], Any]]:
+    return {
+        "make_health_job": lambda: instrumented_job(
+            "health-check", lambda: run_health_checks(session_factory)
+        ),
+        "make_resync_job": lambda: instrumented_job(
+            "resync", lambda: run_resync_all(session_factory)
+        ),
+        "make_retention_job": lambda: instrumented_job(
+            "log-retention", lambda: run_log_retention(session_factory, cfg)
+        ),
+    }
 
 
 def mount_web(app: FastAPI) -> None:
@@ -118,7 +141,11 @@ def mount_web(app: FastAPI) -> None:
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     cfg = settings if settings is not None else Settings()
-    engine = create_db_engine(cfg.database_url)
+    engine = create_db_engine(
+        cfg.database_url,
+        pool_size=cfg.db_pool_size,
+        max_overflow=cfg.db_max_overflow,
+    )
     session_factory = create_session_factory(engine)
     pool = SessionPool(settings=cfg)
     audit = AuditWriter(session_factory)
@@ -131,12 +158,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         audit=audit,
         message_handler_factory=list_changed_handler_factory(coordinator),
     )
+    jobs = instrumented_jobs(cfg, session_factory)
     runner = JobRunner(
         cfg,
         session_factory,
-        make_health_job=lambda: lambda: _safe_job(run_health_checks(session_factory)),
-        make_resync_job=lambda: lambda: _safe_job(run_resync_all(session_factory)),
-        make_retention_job=lambda: lambda: _safe_job(run_log_retention(session_factory, cfg)),
+        make_health_job=jobs["make_health_job"],
+        make_resync_job=jobs["make_resync_job"],
+        make_retention_job=jobs["make_retention_job"],
     )
     gateway = GatewayMount()
 
@@ -177,9 +205,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(title="CAM", lifespan=lifespan)
     install_error_handlers(app)
     app.add_middleware(CsrfMiddleware)
+    app.add_middleware(RequestMetricsMiddleware)
     app.state.auth_provider = default_auth_provider()
     app.include_router(auth_router)
     app.include_router(health_router)
+    app.include_router(metrics_router)
     app.include_router(tokens_router)
     app.include_router(services_router)
     app.include_router(services_create_router)

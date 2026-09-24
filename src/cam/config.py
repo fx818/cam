@@ -65,6 +65,8 @@ class Settings(BaseSettings):
     session_idle_timeout_s: int = 600
     jobs_enabled: bool = True
     log_level: str = "INFO"
+    db_pool_size: int = 10
+    db_max_overflow: int = 20
 
     @model_validator(mode="after")
     def _finalize(self) -> Self:
@@ -101,6 +103,8 @@ class Settings(BaseSettings):
             "healthcheck_interval_s",
             "resync_interval_s",
             "session_idle_timeout_s",
+            "db_pool_size",
+            "db_max_overflow",
         ):
             if getattr(self, field) < 1:
                 raise ValueError(f"CAM_{field.upper()} must be >= 1")
