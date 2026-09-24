@@ -688,7 +688,9 @@ async def list_audit_entries(
 async def get_audit_entry(
     session: AsyncSession, identity: SessionIdentity, entry_id: uuid.UUID
 ) -> dict[str, Any]:
-    row = await session.get(AuditLog, entry_id)
+    row = (
+        await session.execute(select(AuditLog).where(AuditLog.id == entry_id))
+    ).scalar_one_or_none()
     if row is None or row.org_id != identity.org_id:
         raise ServiceNotFound(str(entry_id))
     is_admin = identity.user.role == "admin"

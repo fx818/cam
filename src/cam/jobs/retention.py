@@ -35,9 +35,8 @@ async def list_partitions(
                 text(
                     "SELECT c.relname FROM pg_inherits i "
                     "JOIN pg_class c ON c.oid = i.inhrelid "
-                    "WHERE i.inhparent = :parent::regclass"
-                ),
-                {"parent": parent},
+                    f"WHERE i.inhparent = '{parent}'::regclass"
+                )
             )
         )
         .scalars()

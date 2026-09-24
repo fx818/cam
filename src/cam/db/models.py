@@ -9,6 +9,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    PrimaryKeyConstraint,
     String,
     Text,
     UniqueConstraint,
@@ -289,13 +290,14 @@ class Share(Base):
 class AuditLog(Base):
     __tablename__ = "audit_logs"
     __table_args__ = (
+        PrimaryKeyConstraint("id", "ts", name="audit_logs_pkey"),
         Index("ix_audit_logs_org_id_user_id_ts", "org_id", "user_id", "ts"),
         Index("ix_audit_logs_org_id_owner_user_id_ts", "org_id", "owner_user_id", "ts"),
         Index("ix_audit_logs_org_id_service_id_ts", "org_id", "service_id", "ts"),
         Index("ix_audit_logs_ts", "ts"),
     )
 
-    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False, default=uuid.uuid4)
     org_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("orgs.id"), nullable=False)
     ts: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("now()")
