@@ -12,8 +12,7 @@ import { ServiceDetailPage } from "@/pages/ServiceDetailPage"
 import { SkillsPage } from "@/pages/SkillsPage"
 import { AdminOverviewPage } from "@/pages/admin/AdminOverviewPage"
 import { AdminSettingsPage } from "@/pages/admin/AdminSettingsPage"
-import { AdminServicesPage } from "@/pages/admin/AdminServicesPage"
-import { AdminTemplatesPage } from "@/pages/admin/AdminTemplatesPage"
+import { AdminServicesPage, AdminTemplatesPage } from "@/pages/admin/AdminServicesPage"
 import { AdminUsersPage } from "@/pages/admin/AdminUsersPage"
 
 function LoadingScreen() {

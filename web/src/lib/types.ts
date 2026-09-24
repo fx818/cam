@@ -136,3 +136,59 @@ export interface SkillsResponse {
   skills: unknown[]
   next_cursor: string | null
 }
+
+export interface AdminUser {
+  id: string
+  email: string
+  handle: string
+  display_name: string
+  role: string
+  kind: string
+  status: string
+  created_at: string | null
+  deactivated_at: string | null
+}
+
+export interface AdminUsersResponse {
+  users: AdminUser[]
+}
+
+export interface AdminSettings {
+  default_timeout_ms: number
+  response_cap_tokens: number
+  log_retention_days: number
+  allowed_email_domains: string[]
+  instructions: string
+  brand: Record<string, string>
+}
+
+export interface AdminSettingsResponse {
+  settings: AdminSettings
+}
+
+export interface AllowlistEntry {
+  id: string
+  pattern: string
+  note: string | null
+  created_by_email: string | null
+  created_at: string | null
+}
+
+export interface AllowlistResponse {
+  entries: AllowlistEntry[]
+}
+
+export interface OverviewResponse {
+  users: {
+    total: number
+    active: number
+    deactivated: number
+    admins: number
+  }
+  services: {
+    by_tier: Record<string, number>
+    by_status: Record<string, number>
+    by_health: Record<string, number>
+  }
+  recent_audit: AuditEntry[]
+}

@@ -15,14 +15,17 @@ from cam.api.deps import SessionIdentity
 from cam.api.pagination import decode_cursor, encode_cursor
 from cam.connections.orgs import encrypt_for_org
 from cam.connections.tokens import AuthenticatedIdentity, create_token
+from cam.connections.url_policy import AllowlistError, normalize_pattern
 from cam.db.models import (
     AuditLog,
     CamToken,
     Connection,
+    Org,
     Service,
     ServiceVisibility,
     Share,
     Tool,
+    UrlAllowlist,
     User,
 )
 
@@ -708,3 +711,209 @@ async def get_audit_entry(
     entry = entries[0]
     entry["args"] = row.args
     return entry
+
+
+def admin_user_public(user: User) -> dict[str, Any]:
+    payload = {
+        "id": str(user.id),
+        "email": user.email,
+        "handle": user.handle,
+        "display_name": user.display_name,
+        "role": user.role,
+        "kind": user.kind,
+        "status": user.status,
+        "created_at": user.created_at.isoformat() if user.created_at else None,
+        "deactivated_at": user.deactivated_at.isoformat() if user.deactivated_at else None,
+    }
+    return payload
+
+
+async def list_org_users(session: AsyncSession, identity: SessionIdentity) -> list[dict[str, Any]]:
+    result = await session.execute(
+        select(User).where(User.org_id == identity.org_id).order_by(User.email)
+    )
+    return [admin_user_public(user) for user in result.scalars()]
+
+
+async def get_org_user(
+    session: AsyncSession, identity: SessionIdentity, user_id: uuid.UUID
+) -> User:
+    user = await session.get(User, user_id)
+    if user is None or user.org_id != identity.org_id:
+        raise ServiceNotFound(str(user_id))
+    return user
+
+
+async def count_active_admins(
+    session: AsyncSession, identity: SessionIdentity, *, exclude: uuid.UUID | None = None
+) -> int:
+    stmt = select(func.count(User.id)).where(
+        User.org_id == identity.org_id,
+        User.role == "admin",
+        User.status == "active",
+    )
+    if exclude is not None:
+        stmt = stmt.where(User.id != exclude)
+    return int((await session.execute(stmt)).scalar_one())
+
+
+async def list_tokens_for_user(
+    session: AsyncSession, identity: SessionIdentity, target: User
+) -> list[dict[str, Any]]:
+    result = await session.execute(
+        select(CamToken)
+        .where(CamToken.org_id == identity.org_id, CamToken.user_id == target.id)
+        .order_by(CamToken.created_at.desc(), CamToken.id.desc())
+    )
+    return [token_public(token) for token in result.scalars()]
+
+
+async def list_audit_for_user(
+    session: AsyncSession, identity: SessionIdentity, target: User, *, limit: int
+) -> list[dict[str, Any]]:
+    stmt = (
+        select(AuditLog)
+        .where(AuditLog.org_id == identity.org_id, AuditLog.user_id == target.id)
+        .order_by(AuditLog.ts.desc(), AuditLog.id.desc())
+        .limit(limit)
+    )
+    rows = list((await session.execute(stmt)).scalars())
+    return await _hydrate_audit_entries(session, rows)
+
+
+async def list_org_audit_preview(
+    session: AsyncSession, identity: SessionIdentity, *, limit: int
+) -> list[dict[str, Any]]:
+    stmt = (
+        select(AuditLog)
+        .where(AuditLog.org_id == identity.org_id)
+        .order_by(AuditLog.ts.desc(), AuditLog.id.desc())
+        .limit(limit)
+    )
+    rows = list((await session.execute(stmt)).scalars())
+    return await _hydrate_audit_entries(session, rows)
+
+
+async def admin_overview_stats(session: AsyncSession, identity: SessionIdentity) -> dict[str, Any]:
+    user_rows = (
+        await session.execute(select(User.role, User.status).where(User.org_id == identity.org_id))
+    ).all()
+    users = {
+        "total": len(user_rows),
+        "active": sum(1 for _role, status in user_rows if status == "active"),
+        "deactivated": sum(1 for _role, status in user_rows if status == "deactivated"),
+        "admins": sum(1 for role, status in user_rows if role == "admin" and status == "active"),
+    }
+    service_rows = (
+        await session.execute(
+            select(Service.tier, Service.status, Service.health).where(
+                Service.org_id == identity.org_id,
+                Service.status != "deleted",
+            )
+        )
+    ).all()
+    by_tier: dict[str, int] = {"global": 0, "template": 0, "personal": 0}
+    by_status: dict[str, int] = {}
+    by_health: dict[str, int] = {}
+    for tier, status, health in service_rows:
+        by_tier[tier] = by_tier.get(tier, 0) + 1
+        by_status[status] = by_status.get(status, 0) + 1
+        by_health[health] = by_health.get(health, 0) + 1
+    return {
+        "users": users,
+        "services": {"by_tier": by_tier, "by_status": by_status, "by_health": by_health},
+    }
+
+
+def org_settings_public(org: Org) -> dict[str, Any]:
+    settings = org.settings or {}
+    return {
+        "default_timeout_ms": int(settings.get("default_timeout_ms", 60000)),
+        "response_cap_tokens": int(settings.get("response_cap_tokens", 50000)),
+        "log_retention_days": int(settings.get("log_retention_days", 30)),
+        "allowed_email_domains": list(settings.get("allowed_email_domains", [])),
+        "instructions": str(settings.get("instructions", "")),
+        "brand": dict(settings.get("brand") or {}),
+    }
+
+
+async def update_org_settings(
+    session: AsyncSession, identity: SessionIdentity, updates: dict[str, Any]
+) -> dict[str, Any]:
+    org = await session.get(Org, identity.org_id)
+    assert org is not None
+    merged = dict(org.settings or {})
+    merged.update(updates)
+    org.settings = merged
+    await session.flush()
+    return org_settings_public(org)
+
+
+def allowlist_public(row: UrlAllowlist, created_by_email: str | None) -> dict[str, Any]:
+    return {
+        "id": str(row.id),
+        "pattern": row.pattern,
+        "note": row.note,
+        "created_by_email": created_by_email,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+    }
+
+
+async def list_allowlist_entries(
+    session: AsyncSession, identity: SessionIdentity
+) -> list[dict[str, Any]]:
+    rows = list(
+        (
+            await session.execute(
+                select(UrlAllowlist)
+                .where(UrlAllowlist.org_id == identity.org_id)
+                .order_by(UrlAllowlist.pattern)
+            )
+        ).scalars()
+    )
+    creator_ids = {row.created_by for row in rows if row.created_by is not None}
+    creators: dict[uuid.UUID, User] = {}
+    if creator_ids:
+        creator_rows = (
+            await session.execute(select(User).where(User.id.in_(creator_ids)))
+        ).scalars()
+        creators = {user.id: user for user in creator_rows}
+    entries: list[dict[str, Any]] = []
+    for row in rows:
+        creator_email = None
+        if row.created_by is not None and row.created_by in creators:
+            creator_email = creators[row.created_by].email
+        entries.append(allowlist_public(row, creator_email))
+    return entries
+
+
+async def add_allowlist_entry(
+    session: AsyncSession, identity: SessionIdentity, *, pattern: str, note: str | None
+) -> dict[str, Any]:
+    normalized = normalize_pattern(pattern)
+    existing = await session.execute(
+        select(UrlAllowlist.id).where(
+            UrlAllowlist.org_id == identity.org_id, UrlAllowlist.pattern == normalized
+        )
+    )
+    if existing.first() is not None:
+        raise AllowlistError(f"pattern {normalized!r} is already allowlisted")
+    row = UrlAllowlist(
+        org_id=identity.org_id,
+        pattern=normalized,
+        note=note,
+        created_by=identity.user.id,
+    )
+    session.add(row)
+    await session.flush()
+    return allowlist_public(row, identity.user.email)
+
+
+async def delete_allowlist_entry(
+    session: AsyncSession, identity: SessionIdentity, entry_id: uuid.UUID
+) -> None:
+    row = await session.get(UrlAllowlist, entry_id)
+    if row is None or row.org_id != identity.org_id:
+        raise ServiceNotFound(str(entry_id))
+    await session.delete(row)
+    await session.flush()
