@@ -167,17 +167,15 @@ async def _announce(
                 .where(Service.id == outcome.service_id)
                 .values(health=outcome.health)
             )
-            await db.execute(
-                update(Connection)
-                .where(Connection.id == outcome.connection_id)
-                .values(
-                    status=(
-                        Connection.status
-                        if outcome.health != CREDENTIAL_EXPIRED
-                        else "needs_reconnect"
+            if outcome.health == CREDENTIAL_EXPIRED:
+                await db.execute(
+                    update(Connection)
+                    .where(
+                        Connection.id == outcome.connection_id,
+                        Connection.status == "connected",
                     )
+                    .values(status="needs_reconnect")
                 )
-            )
         await db.commit()
 
 
