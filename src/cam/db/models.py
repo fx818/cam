@@ -241,6 +241,24 @@ class Connection(Base):
     )
 
 
+class ServiceVisibility(Base):
+    __tablename__ = "service_visibility"
+    __table_args__ = (
+        UniqueConstraint("service_id", "user_id", name="uq_service_visibility_service_user"),
+        Index("ix_service_visibility_org_id", "org_id"),
+        Index("ix_service_visibility_service_id", "service_id"),
+        Index("ix_service_visibility_user_id", "user_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    org_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("orgs.id"), nullable=False)
+    service_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("services.id"), nullable=False)
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+
 class AuditLog(Base):
     __tablename__ = "audit_logs"
     __table_args__ = (
