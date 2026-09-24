@@ -10,7 +10,8 @@ from __future__ import annotations
 import json
 import logging
 import time
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, replace
 from typing import Any, cast
 from urllib.parse import urlencode
 from uuid import UUID
@@ -49,6 +50,7 @@ from cam.invoke.errors import (
 from cam.invoke.rate_limit import RateLimiter
 from cam.invoke.truncation import truncate_blocks
 from cam.invoke.validation import validate_args
+from cam.jobs.health import record_invoke_health
 from cam.upstream.errors import UpstreamError
 from cam.upstream.pool import SessionPool
 from cam.upstream.rest import execute_rest
@@ -76,6 +78,9 @@ class CamResult:
     audit_ref: AuditRef | None = None
 
 
+MessageHandlerFactory = Callable[[str, str], Any]
+
+
 @dataclass(frozen=True, slots=True)
 class GatewayDeps:
     session_factory: async_sessionmaker[AsyncSession]
@@ -83,6 +88,7 @@ class GatewayDeps:
     settings: Settings
     rate_limiter: RateLimiter
     audit: AuditWriter
+    message_handler_factory: MessageHandlerFactory | None = None
 
 
 def error_result(exc: CamError) -> CamResult:
@@ -227,6 +233,13 @@ async def _invoke(
                     f"The {resolved.service.name} connection has expired. "
                     "An admin needs to reconnect it in the CAM dashboard."
                 )
+            await record_invoke_health(
+                deps.session_factory,
+                service_id=resolved.service.id,
+                connection_id=connection.id,
+                ok=False,
+                error_code="CONNECTION_EXPIRED",
+            )
             raise CamError(
                 CamErrorCode.CONNECTION_EXPIRED,
                 message,
@@ -234,6 +247,13 @@ async def _invoke(
                 audit_ref=audit_ref,
             ) from exc
         except CredentialError as exc:
+            await record_invoke_health(
+                deps.session_factory,
+                service_id=resolved.service.id,
+                connection_id=connection.id,
+                ok=False,
+                error_code="UPSTREAM_AUTH",
+            )
             raise CamError(
                 CamErrorCode.UPSTREAM_AUTH,
                 "Credential rejected. Owner needs to reconnect.",
@@ -276,12 +296,27 @@ async def _invoke(
                 url_policy=url_policy,
             )
     except UpstreamError as exc:
-        raise map_upstream_error(
+        cam_error = map_upstream_error(
             exc, service_ref=ref, service_name=service.name, audit_ref=audit_ref
-        ) from exc
+        )
+        await record_invoke_health(
+            deps.session_factory,
+            service_id=service.id,
+            connection_id=connection.id,
+            ok=False,
+            error_code=str(cam_error.code),
+        )
+        raise cam_error from exc
     if outcome.is_error:
         upstream_text = "".join(
             block.text for block in outcome.content if isinstance(block, TextBlock)
+        )
+        await record_invoke_health(
+            deps.session_factory,
+            service_id=service.id,
+            connection_id=connection.id,
+            ok=False,
+            error_code="UPSTREAM_ERROR",
         )
         raise CamError(
             CamErrorCode.UPSTREAM_ERROR,
@@ -289,6 +324,13 @@ async def _invoke(
             service=ref,
             audit_ref=audit_ref,
         )
+    await record_invoke_health(
+        deps.session_factory,
+        service_id=service.id,
+        connection_id=connection.id,
+        ok=True,
+        error_code=None,
+    )
     content, truncated = truncate_blocks(outcome.content, service.response_cap_tokens)
     return CamResult(
         content=content,
@@ -325,6 +367,11 @@ async def _dispatch_mcp(
         headers=credential_headers,
         url_policy=url_policy,
     )
+    if deps.message_handler_factory is not None:
+        target = replace(
+            target,
+            message_handler=deps.message_handler_factory(str(service.id), str(connection_id)),
+        )
     upstream = await deps.pool.session(target)
     return await upstream.call_tool(
         tool.upstream_name, call_args, timeout_s=service.timeout_ms / 1000

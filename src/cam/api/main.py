@@ -1,7 +1,8 @@
 import logging
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI
 from fastapi.responses import FileResponse, JSONResponse
@@ -34,7 +35,27 @@ from cam.gateway.auth import BearerAuthMiddleware
 from cam.gateway.server import create_mcp_server, load_server_instructions
 from cam.invoke.pipeline import GatewayDeps
 from cam.invoke.rate_limit import RateLimiter
+from cam.jobs.health import run_health_checks
+from cam.jobs.resync import run_resync_all
+from cam.jobs.retention import run_log_retention
+from cam.jobs.runner import JobRunner
+from cam.registry.resync import ResyncCoordinator
 from cam.upstream.pool import SessionPool
+
+
+def _list_changed_handler_factory(
+    coordinator: ResyncCoordinator,
+) -> Callable[[str, str], Any]:
+    def factory(service_id: str, connection_id: str) -> Any:
+        del connection_id
+
+        async def handler(message: object) -> None:
+            if type(message).__name__ == "ToolListChangedNotification":
+                coordinator.enqueue(service_id)
+
+        return handler
+
+    return factory
 
 
 class GatewayMount:
@@ -65,6 +86,13 @@ class GatewayMount:
 WEB_DIST = Path(__file__).resolve().parents[3] / "web" / "dist"
 
 
+async def _safe_job(coroutine_factory: Any) -> None:
+    try:
+        await coroutine_factory
+    except Exception:
+        logging.getLogger(__name__).exception("background job failed")
+
+
 def mount_web(app: FastAPI) -> None:
     index = WEB_DIST / "index.html"
     if not index.is_file():
@@ -93,12 +121,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     session_factory = create_session_factory(engine)
     pool = SessionPool(settings=cfg)
     audit = AuditWriter(session_factory)
+    coordinator = ResyncCoordinator(session_factory)
     deps = GatewayDeps(
         session_factory=session_factory,
         pool=pool,
         settings=cfg,
         rate_limiter=RateLimiter(cfg.rate_limit_per_min),
         audit=audit,
+        message_handler_factory=_list_changed_handler_factory(coordinator),
+    )
+    runner = JobRunner(
+        cfg,
+        session_factory,
+        make_health_job=lambda: lambda: _safe_job(run_health_checks(session_factory)),
+        make_resync_job=lambda: lambda: _safe_job(run_resync_all(session_factory)),
+        make_retention_job=lambda: lambda: _safe_job(run_log_retention(session_factory, cfg)),
     )
     gateway = GatewayMount()
 
@@ -111,6 +148,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.pool = pool
         app.state.deps = deps
         app.state.audit = audit
+        app.state.resync_coordinator = coordinator
+        app.state.job_runner = runner
         instructions = await load_server_instructions(session_factory)
         server = create_mcp_server(deps, instructions=instructions)
         _ = server.streamable_http_app(
@@ -123,9 +162,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.mcp_server = server
         try:
             await audit.start()
+            coordinator.start()
+            runner.start()
             async with server.session_manager.run():
                 yield
         finally:
+            await runner.aclose()
+            await coordinator.aclose()
             await audit.aclose()
             await pool.aclose()
             await engine.dispose()

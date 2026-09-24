@@ -28,6 +28,7 @@ TEST_DATABASE_URL = os.environ.get(
 
 os.environ["CAM_DATABASE_URL"] = TEST_DATABASE_URL
 os.environ["CAM_ENV"] = "dev"
+os.environ.setdefault("CAM_JOBS_ENABLED", "false")
 os.environ.setdefault("CAM_ENCRYPTION_KEYS", "v1:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=")
 os.environ.setdefault("CAM_ENCRYPTION_KEY_CURRENT", "v1")
 

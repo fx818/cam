@@ -63,6 +63,7 @@ class Settings(BaseSettings):
     healthcheck_interval_s: int = 300
     resync_interval_s: int = 3600
     session_idle_timeout_s: int = 600
+    jobs_enabled: bool = True
     log_level: str = "INFO"
 
     @model_validator(mode="after")

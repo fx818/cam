@@ -367,22 +367,19 @@ def _database_name(url: str) -> tuple[str, str]:
     return base, name
 
 
-async def _ensure_database(url: str) -> None:
+async def _recreate_database(url: str) -> None:
     base, name = _database_name(url)
     engine = create_async_engine(f"{base}/postgres", isolation_level="AUTOCOMMIT")
     try:
         async with engine.connect() as conn:
-            result = await conn.execute(
-                text("SELECT 1 FROM pg_database WHERE datname = :name"), {"name": name}
-            )
-            if result.first() is None:
-                await conn.execute(text(f'CREATE DATABASE "{name}"'))
+            await conn.execute(text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
+            await conn.execute(text(f'CREATE DATABASE "{name}"'))
     finally:
         await engine.dispose()
 
 
 def test_migrations_apply_and_reverse_cleanly(monkeypatch: pytest.MonkeyPatch) -> None:
-    asyncio.run(_ensure_database(MIGRATION_TEST_URL))
+    asyncio.run(_recreate_database(MIGRATION_TEST_URL))
     monkeypatch.setenv("CAM_DATABASE_URL", MIGRATION_TEST_URL)
     cfg = alembic.config.Config(os.path.join(REPO_ROOT, "alembic.ini"))
     alembic.command.upgrade(cfg, "head")
