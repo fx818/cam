@@ -22,10 +22,13 @@ from cam.registry.services import (
     McpAuthType,
     McpTransport,
     ServiceError,
+    ServiceStatus,
     ServiceVisibilityLevel,
     grant_service_visibility,
     register_global_mcp,
+    register_personal_mcp,
     revoke_service_visibility,
+    set_service_status,
     set_service_visibility,
 )
 
@@ -213,6 +216,91 @@ def register_global_mcp_cmd(
     except IntegrityError:
         raise click.ClickException(f"service slug {slug!r} is already registered") from None
     click.echo(f"Registered global MCP: global/{service.slug}")
+
+
+@main.command("register-personal-mcp")
+@click.option("--email", required=True, help="Email of the owner registering the service.")
+@click.option("--slug", required=True, help="Service slug, e.g. team-api.")
+@click.option("--name", required=True, help="Display name.")
+@click.option("--url", required=True, help="MCP endpoint URL.")
+@click.option("--transport", type=TransportChoice, required=True)
+@click.option("--auth-type", type=AuthTypeChoice, default="none", show_default=True)
+@click.option("--header-name", default=None, help="Header name for static-header auth.")
+@click.option(
+    "--header-value",
+    default=None,
+    help="Secret header or bearer value; prompted hidden when required.",
+)
+@click.option("--description", default="")
+def register_personal_mcp_cmd(
+    email: str,
+    slug: str,
+    name: str,
+    url: str,
+    transport: str,
+    auth_type: str,
+    header_name: str | None,
+    header_value: str | None,
+    description: str,
+) -> None:
+    """Register a personal MCP service under <handle>/<slug>."""
+    credential = header_value
+    if auth_type in ("static-header", "bearer") and credential is None:
+        credential = click.prompt("Credential", hide_input=True)
+
+    async def _register(session: AsyncSession) -> tuple[str, str]:
+        owner = await get_user_by_email(session, email)
+        if owner is None:
+            raise click.ClickException(f"no user with email {email}")
+        try:
+            service, _connection = await register_personal_mcp(
+                session,
+                owner=owner,
+                slug=slug,
+                name=name,
+                url=url,
+                transport=cast(McpTransport, transport),
+                auth_type=cast(McpAuthType, auth_type),
+                header_name=header_name,
+                credential=credential,
+                description=description,
+            )
+        except ServiceError as exc:
+            raise click.ClickException(str(exc)) from exc
+        return owner.handle, service.slug
+
+    try:
+        handle, resolved_slug = asyncio.run(_with_session(_register))
+    except IntegrityError:
+        raise click.ClickException(
+            f"personal service slug {slug!r} is already registered for this user"
+        ) from None
+    click.echo(f"Registered personal MCP: {handle}/{resolved_slug}")
+
+
+@main.command("set-service-status")
+@click.option(
+    "--service",
+    "ref",
+    required=True,
+    help="Service id: global/<slug> or <handle>/<slug>.",
+)
+@click.option(
+    "--status",
+    type=click.Choice(["active", "disabled"]),
+    required=True,
+)
+def set_service_status_cmd(ref: str, status: str) -> None:
+    """Enable or disable a global or personal service."""
+
+    async def _apply(session: AsyncSession) -> None:
+        try:
+            service = await set_service_status(session, ref=ref, status=cast(ServiceStatus, status))
+        except ServiceError as exc:
+            raise click.ClickException(str(exc)) from exc
+        click.echo(f"Service {ref} is now {service.status}")
+
+    asyncio.run(_with_session(_apply))
 
 
 @main.command("set-service-visibility")

@@ -1,6 +1,7 @@
 from cam.access.credentials import CredentialError, resolve_credential_headers
 from cam.access.resolution import (
     GLOBAL_OWNER,
+    ResolvedService,
     ResolvedTool,
     ServiceDisabled,
     ServiceNotFound,
@@ -9,6 +10,7 @@ from cam.access.resolution import (
     list_tools,
     parse_service_ref,
     parse_tool_id,
+    resolve_connection,
     resolve_org_connection,
     resolve_service,
     resolve_tool,
@@ -19,6 +21,7 @@ from cam.access.resolution import (
 __all__ = [
     "GLOBAL_OWNER",
     "CredentialError",
+    "ResolvedService",
     "ResolvedTool",
     "ServiceDisabled",
     "ServiceNotFound",
@@ -27,6 +30,7 @@ __all__ = [
     "list_tools",
     "parse_service_ref",
     "parse_tool_id",
+    "resolve_connection",
     "resolve_credential_headers",
     "resolve_org_connection",
     "resolve_service",

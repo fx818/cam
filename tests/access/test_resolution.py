@@ -187,7 +187,8 @@ async def test_resolve_service_restricted_not_found_without_grant(
     )
     await db_session.flush()
     resolved = await resolve_service(db_session, identity, ref)
-    assert resolved.id == service.id
+    assert resolved.service.id == service.id
+    assert resolved.ref == ref
 
 
 async def test_resolve_service_disabled_status_raises(db_session: AsyncSession) -> None:
@@ -224,7 +225,7 @@ async def test_list_tools_filters_disabled(db_session: AsyncSession) -> None:
     await _make_tool(db_session, identity.org_id, service, "gamma", status="pending_review")
 
     resolved_service, tools = await list_tools(db_session, identity, f"global/{service.slug}")
-    assert resolved_service.id == service.id
+    assert resolved_service.service.id == service.id
     assert [tool.name for tool in tools] == ["alpha"]
 
 

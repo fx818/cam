@@ -394,6 +394,111 @@ def test_cli_bootstrap_creates_default_org_data_key() -> None:
     assert org.data_key_enc is not None
 
 
+def test_register_personal_mcp_and_status_cli_commands() -> None:
+    email = f"{_unique('persowner')}@example.com"
+    runner = CliRunner()
+    created = runner.invoke(main, ["create-user", "--email", email, "--password", "pw-pers-12345"])
+    assert created.exit_code == 0, created.output
+    handle = email.split("@")[0].lower()
+    slug = _unique("teamapi")
+
+    registered = runner.invoke(
+        main,
+        [
+            "register-personal-mcp",
+            "--email",
+            email,
+            "--slug",
+            slug,
+            "--name",
+            "Team API",
+            "--url",
+            "https://teamapi.example.com/mcp",
+            "--transport",
+            "streamable-http",
+            "--auth-type",
+            "bearer",
+            "--header-value",
+            "personal-secret-value",
+        ],
+    )
+    assert registered.exit_code == 0, registered.output
+    assert f"{handle}/{slug}" in registered.output
+    assert "personal-secret-value" not in registered.output
+
+    service = asyncio.run(_get_service(slug))
+    assert service is not None
+    assert service.tier == "personal"
+    assert service.status == "active"
+    connection = asyncio.run(_get_connection(service.id))
+    assert connection is not None
+    assert connection.user_id is not None
+    assert asyncio.run(_decrypt_connection_secret(connection.id)) == b"personal-secret-value"
+
+    disabled = runner.invoke(
+        main,
+        ["set-service-status", "--service", f"{handle}/{slug}", "--status", "disabled"],
+    )
+    assert disabled.exit_code == 0, disabled.output
+    assert "disabled" in disabled.output
+    service = asyncio.run(_get_service(slug))
+    assert service is not None
+    assert service.status == "disabled"
+
+    enabled = runner.invoke(
+        main,
+        ["set-service-status", "--service", f"{handle}/{slug}", "--status", "active"],
+    )
+    assert enabled.exit_code == 0, enabled.output
+    service = asyncio.run(_get_service(slug))
+    assert service is not None
+    assert service.status == "active"
+
+    duplicate = runner.invoke(
+        main,
+        [
+            "register-personal-mcp",
+            "--email",
+            email,
+            "--slug",
+            slug,
+            "--name",
+            "Team API Again",
+            "--url",
+            "https://teamapi.example.com/mcp",
+            "--transport",
+            "streamable-http",
+            "--auth-type",
+            "none",
+        ],
+    )
+    assert duplicate.exit_code == 1
+    assert "already registered" in duplicate.output
+
+
+def test_register_personal_mcp_unknown_email_fails() -> None:
+    result = CliRunner().invoke(
+        main,
+        [
+            "register-personal-mcp",
+            "--email",
+            f"{_unique('ghost')}@example.com",
+            "--slug",
+            _unique("ghostroute"),
+            "--name",
+            "Ghost",
+            "--url",
+            "https://ghost.example.com/mcp",
+            "--transport",
+            "streamable-http",
+            "--auth-type",
+            "none",
+        ],
+    )
+    assert result.exit_code == 1
+    assert "no user with email" in result.output
+
+
 def test_service_visibility_cli_commands() -> None:
     slug = _unique("viscli")
     runner = CliRunner()

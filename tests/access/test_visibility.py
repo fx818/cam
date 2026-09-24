@@ -86,7 +86,7 @@ async def test_set_grant_revoke_visibility_flow(db_session: AsyncSession) -> Non
     )
     assert service.visibility == "restricted"
     resolved = await resolve_service(db_session, identity_a, ref)
-    assert resolved.id == service.id
+    assert resolved.service.id == service.id
     listed_a = {s.id for s in await list_services(db_session, identity_a)}
     assert ref in listed_a
     listed_b = {s.id for s in await list_services(db_session, identity_b)}
@@ -103,7 +103,7 @@ async def test_set_grant_revoke_visibility_flow(db_session: AsyncSession) -> Non
 
     service = await set_service_visibility(db_session, slug=service.slug, visibility="all")
     resolved = await resolve_service(db_session, identity_b, ref)
-    assert resolved.id == service.id
+    assert resolved.service.id == service.id
 
 
 async def test_visibility_admin_error_cases(db_session: AsyncSession) -> None:

@@ -1,26 +1,27 @@
 """Access resolution: the single security boundary for list, describe and invoke.
 
 Every path that lists, describes or invokes a tool goes through these
-functions. Phase 1 scope: global services only; template and personal tiers
-arrive in later phases and must be added here, not at call sites.
+functions. Global services are reached through admin visibility; personal
+services through the owner's handle (owner access in Phase 2.2, shares from
+Phase 2.3). Callers without access always get `ServiceNotFound`.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cam.audit.writer import AuditRef
 from cam.connections.tokens import AuthenticatedIdentity
-from cam.db.models import Connection, Service, ServiceVisibility, Tool
+from cam.db.models import Connection, Service, ServiceVisibility, Tool, User
 
 GLOBAL_OWNER = "global"
 
 
 class ServiceNotFound(Exception):
-    """Unknown ID, excluded tool, non-global owner in Phase 1, or no access."""
+    """Unknown ID, excluded tool, or no access."""
 
 
 class ServiceDisabled(Exception):
@@ -44,8 +45,16 @@ class ServiceSummary:
 
 
 @dataclass(frozen=True, slots=True)
+class ResolvedService:
+    service: Service
+    ref: str
+    owner_handle: str | None
+
+
+@dataclass(frozen=True, slots=True)
 class ResolvedTool:
     id: str
+    service_ref: str
     service: Service
     tool: Tool
 
@@ -70,12 +79,16 @@ def parse_tool_id(tool_id: str) -> tuple[str, str, str]:
     return owner.lower(), slug, name
 
 
-def service_ref(service: Service) -> str:
-    return f"{GLOBAL_OWNER}/{service.slug}"
+def service_ref(service: Service, owner_handle: str | None = None) -> str:
+    if service.tier == "global":
+        return f"{GLOBAL_OWNER}/{service.slug}"
+    if not owner_handle:
+        raise ValueError(f"owner handle required to build the ref for service {service.slug!r}")
+    return f"{owner_handle}/{service.slug}"
 
 
-def tool_ref(service: Service, tool: Tool) -> str:
-    return f"{GLOBAL_OWNER}/{service.slug}/{tool.name}"
+def tool_ref(service: Service, tool: Tool, owner_handle: str | None = None) -> str:
+    return f"{service_ref(service, owner_handle)}/{tool.name}"
 
 
 async def has_access(
@@ -97,11 +110,47 @@ async def has_access(
     return result.first() is not None
 
 
+async def _lookup_service(
+    session: AsyncSession, identity: AuthenticatedIdentity, owner: str, slug: str
+) -> tuple[Service, str | None]:
+    if owner == GLOBAL_OWNER:
+        result = await session.execute(
+            select(Service).where(
+                Service.org_id == identity.org_id,
+                Service.tier == GLOBAL_OWNER,
+                Service.slug == slug,
+            )
+        )
+        service = result.scalar_one_or_none()
+        if service is None:
+            raise ServiceNotFound(f"{GLOBAL_OWNER}/{slug}")
+        return service, None
+    owner_result = await session.execute(
+        select(User).where(User.org_id == identity.org_id, User.handle == owner)
+    )
+    owner_user = owner_result.scalar_one_or_none()
+    if owner_user is None:
+        raise ServiceNotFound(f"{owner}/{slug}")
+    result = await session.execute(
+        select(Service).where(
+            Service.org_id == identity.org_id,
+            Service.tier == "personal",
+            Service.owner_user_id == owner_user.id,
+            Service.slug == slug,
+        )
+    )
+    service = result.scalar_one_or_none()
+    if service is None:
+        raise ServiceNotFound(f"{owner}/{slug}")
+    return service, owner_user.handle
+
+
 async def list_services(
     session: AsyncSession, identity: AuthenticatedIdentity
 ) -> list[ServiceSummary]:
     stmt = (
-        select(Service, func.count(Tool.id))
+        select(Service, User.handle, func.count(Tool.id))
+        .outerjoin(User, User.id == Service.owner_user_id)
         .outerjoin(
             Tool,
             and_(
@@ -112,98 +161,83 @@ async def list_services(
         )
         .where(
             Service.org_id == identity.org_id,
-            Service.tier == GLOBAL_OWNER,
+            or_(Service.tier == GLOBAL_OWNER, Service.tier == "personal"),
             Service.status == "active",
         )
-        .group_by(Service.id)
+        .group_by(Service.id, User.handle)
         .order_by(Service.slug)
     )
     rows = (await session.execute(stmt)).all()
-    allowed: list[tuple[Service, int]] = []
-    for service, tool_count in rows:
+    allowed: list[tuple[Service, str | None, int]] = []
+    for service, owner_handle, tool_count in rows:
         if await has_access(session, identity, service):
-            allowed.append((service, tool_count))
+            allowed.append((service, owner_handle, tool_count))
     return [
         ServiceSummary(
-            id=service_ref(service),
+            id=service_ref(service, owner_handle),
             name=service.name,
             description=service.description,
             tier=service.tier,
-            owner=None,
+            owner=owner_handle if service.tier == "personal" else None,
             shared_by=None,
             health=service.health,
             tool_count=tool_count,
         )
-        for service, tool_count in allowed
+        for service, owner_handle, tool_count in allowed
     ]
 
 
 async def resolve_service(
     session: AsyncSession, identity: AuthenticatedIdentity, ref: str
-) -> Service:
+) -> ResolvedService:
     owner, slug = parse_service_ref(ref)
-    if owner != GLOBAL_OWNER:
-        raise ServiceNotFound(ref)
-    result = await session.execute(
-        select(Service).where(
-            Service.org_id == identity.org_id,
-            Service.tier == GLOBAL_OWNER,
-            Service.slug == slug,
-        )
-    )
-    service = result.scalar_one_or_none()
-    if service is None:
-        raise ServiceNotFound(ref)
+    service, owner_handle = await _lookup_service(session, identity, owner, slug)
+    resolved_ref = service_ref(service, owner_handle)
     if not await has_access(session, identity, service):
         raise ServiceNotFound(ref)
     if service.status != "active":
-        raise ServiceDisabled(ref, audit_ref=AuditRef(service_id=service.id))
-    return service
+        raise ServiceDisabled(resolved_ref, audit_ref=AuditRef(service_id=service.id))
+    return ResolvedService(service=service, ref=resolved_ref, owner_handle=owner_handle)
 
 
 async def list_tools(
     session: AsyncSession, identity: AuthenticatedIdentity, ref: str
-) -> tuple[Service, list[Tool]]:
-    service = await resolve_service(session, identity, ref)
+) -> tuple[ResolvedService, list[Tool]]:
+    resolved = await resolve_service(session, identity, ref)
     result = await session.execute(
         select(Tool)
         .where(
-            Tool.service_id == service.id,
+            Tool.service_id == resolved.service.id,
             Tool.enabled.is_(True),
             Tool.status == "active",
         )
         .order_by(Tool.name)
     )
-    return service, list(result.scalars())
+    return resolved, list(result.scalars())
 
 
 async def resolve_tool(
     session: AsyncSession, identity: AuthenticatedIdentity, tool_id: str
 ) -> ResolvedTool:
     owner, slug, name = parse_tool_id(tool_id)
-    if owner != GLOBAL_OWNER:
-        raise ServiceNotFound(tool_id)
-    result = await session.execute(
-        select(Service).where(
-            Service.org_id == identity.org_id,
-            Service.tier == GLOBAL_OWNER,
-            Service.slug == slug,
-        )
-    )
-    service = result.scalar_one_or_none()
-    if service is None:
-        raise ServiceNotFound(tool_id)
+    service, owner_handle = await _lookup_service(session, identity, owner, slug)
+    resolved_ref = service_ref(service, owner_handle)
     if not await has_access(session, identity, service):
         raise ServiceNotFound(tool_id)
     if service.status != "active":
-        raise ServiceDisabled(tool_id, audit_ref=AuditRef(service_id=service.id))
+        raise ServiceDisabled(resolved_ref, audit_ref=AuditRef(service_id=service.id))
     tool_result = await session.execute(
         select(Tool).where(Tool.service_id == service.id, Tool.name == name)
     )
     tool = tool_result.scalar_one_or_none()
     if tool is None or not tool.enabled or tool.status != "active":
         raise ServiceNotFound(tool_id)
-    return ResolvedTool(id=tool_ref(service, tool), service=service, tool=tool)
+    return ResolvedTool(
+        id=tool_ref(service, tool, owner_handle),
+        service_ref=resolved_ref,
+        service=service,
+        tool=tool,
+    )
 
 
 async def resolve_org_connection(session: AsyncSession, service: Service) -> Connection:
@@ -218,3 +252,24 @@ async def resolve_org_connection(session: AsyncSession, service: Service) -> Con
     if connection is None or connection.status != "connected":
         raise ServiceDisabled(service_ref(service), audit_ref=AuditRef(service_id=service.id))
     return connection
+
+
+async def resolve_connection(session: AsyncSession, service: Service, *, ref: str) -> Connection:
+    if service.tier == "global":
+        try:
+            return await resolve_org_connection(session, service)
+        except ServiceDisabled:
+            raise ServiceDisabled(ref, audit_ref=AuditRef(service_id=service.id)) from None
+    if service.tier == "personal":
+        result = await session.execute(
+            select(Connection).where(
+                Connection.org_id == service.org_id,
+                Connection.service_id == service.id,
+                Connection.user_id == service.owner_user_id,
+            )
+        )
+        connection = result.scalar_one_or_none()
+        if connection is None or connection.status != "connected":
+            raise ServiceDisabled(ref, audit_ref=AuditRef(service_id=service.id))
+        return connection
+    raise ServiceDisabled(ref, audit_ref=AuditRef(service_id=service.id))

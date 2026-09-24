@@ -22,8 +22,9 @@ from cam.access import (
     ServiceSummary,
     list_services,
     list_tools,
-    resolve_org_connection,
+    resolve_connection,
     resolve_tool,
+    tool_ref,
 )
 from cam.access.credentials import CredentialError, resolve_credential_headers
 from cam.audit.writer import AuditEvent, AuditRef, AuditWriter
@@ -141,16 +142,16 @@ async def _list_tools(
     async with deps.session_factory() as session:
         resolved_service, tools = await list_tools(session, identity, ref)
     payload = {
-        "service": f"global/{resolved_service.slug}",
+        "service": resolved_service.ref,
         "tools": [
             {
-                "id": f"global/{resolved_service.slug}/{tool.name}",
+                "id": tool_ref(resolved_service.service, tool, resolved_service.owner_handle),
                 "description": _tool_description(tool),
             }
             for tool in tools
         ],
     }
-    return payload_result(payload, AuditRef(service_id=resolved_service.id))
+    return payload_result(payload, AuditRef(service_id=resolved_service.service.id))
 
 
 async def _describe(deps: GatewayDeps, identity: AuthenticatedIdentity, tool_id: Any) -> CamResult:
@@ -184,7 +185,7 @@ async def _invoke(
 
     async with deps.session_factory() as session:
         resolved: ResolvedTool = await resolve_tool(session, identity, raw_id)
-        connection = await resolve_org_connection(session, resolved.service)
+        connection = await resolve_connection(session, resolved.service, ref=resolved.service_ref)
         audit_ref = AuditRef(
             service_id=resolved.service.id,
             connection_id=connection.id,
@@ -198,7 +199,7 @@ async def _invoke(
             raise CamError(
                 CamErrorCode.UPSTREAM_AUTH,
                 "Credential rejected. Owner needs to reconnect.",
-                service=f"global/{resolved.service.slug}",
+                service=resolved.service_ref,
                 audit_ref=audit_ref,
             ) from exc
         try:
@@ -208,7 +209,7 @@ async def _invoke(
             raise
 
     service = resolved.service
-    ref = f"global/{service.slug}"
+    ref = resolved.service_ref
     transport = (
         service.transport if service.transport in ("streamable-http", "sse") else "streamable-http"
     )
