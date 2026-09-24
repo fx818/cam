@@ -705,9 +705,9 @@ An end-to-end slice with no dashboard; admin tasks use a CLI.
 ### Phase 7: Hardening and pilot
 
 - [ ] 7.1 Security review with IndiaMART's security team: credential storage, key handling, access checks, full-args logs
-- [ ] 7.2 Load test with many agents calling slow tools at once, to confirm nothing blocks
-- [ ] 7.3 Harness checks for Claude Code, Codex and Cursor: tool-call timeouts, routing, configs
-- [ ] 7.4 Onboarding and "register a service" guides
+- [x] 7.2 Load test with many agents calling slow tools at once, to confirm nothing blocks
+- [x] 7.3 Harness checks for Claude Code, Codex and Cursor: tool-call timeouts, routing, configs
+- [x] 7.4 Onboarding and "register a service" guides
 - [ ] 7.5 Pilot with one or two teams; fix issues and tune tool descriptions from the audit log
 
 **Done when:** the pilot teams use CAM daily with no blocking issues, and the security review is signed off.
