@@ -18,6 +18,9 @@ dependencies = [
     "uvicorn[standard]>=0.32",
 ]
 
+[project.scripts]
+cam = "cam.cli:main"
+
 [dependency-groups]
 dev = [
     "pre-commit>=4.0",
