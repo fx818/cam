@@ -1,0 +1,29 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: cam
+  namespace: cam
+  labels:
+    app.kubernetes.io/name: cam
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "130"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "130"
+    nginx.ingress.kubernetes.io/proxy-body-size: "16m"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - cam.CHANGE_ME.internal
+      secretName: cam-tls
+  rules:
+    - host: cam.CHANGE_ME.internal
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: cam
+                port:
+                  name: http

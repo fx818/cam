@@ -1,0 +1,54 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: cam-migrate
+  namespace: cam
+  labels:
+    app.kubernetes.io/name: cam
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: cam
+    spec:
+      serviceAccountName: cam
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: REGION-docker.pkg.dev/PROJECT/REPO/cam:SET_TAG_AT_DEPLOY
+          args:
+            - sh
+            - -c
+            - uv run --no-sync alembic upgrade head
+          envFrom:
+            - configMapRef:
+                name: cam-config
+          env:
+            - name: CAM_ENCRYPTION_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: cam-secrets
+                  key: CAM_ENCRYPTION_KEYS
+            - name: CAM_ENCRYPTION_KEY_CURRENT
+              valueFrom:
+                secretKeyRef:
+                  name: cam-secrets
+                  key: CAM_ENCRYPTION_KEY_CURRENT
+            - name: CAM_SESSION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: cam-secrets
+                  key: CAM_SESSION_SECRET
+            - name: CAM_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: cam-db
+                  key: CAM_DATABASE_URL
+            - name: CAM_JOBS_ENABLED
+              value: "false"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi

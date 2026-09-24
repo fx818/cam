@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cam-config
+  namespace: cam
+  labels:
+    app.kubernetes.io/name: cam
+data:
+  CAM_ENV: "prod"
+  CAM_BASE_URL: "https://cam.CHANGE_ME.internal"
+  CAM_UVICORN_WORKERS: "1"
+  CAM_DB_POOL_SIZE: "20"
+  CAM_DB_MAX_OVERFLOW: "40"
+  CAM_DEFAULT_TIMEOUT_S: "60"
+  CAM_DEFAULT_RESPONSE_CAP_TOKENS: "50000"
+  CAM_LOG_RETENTION_DAYS: "30"
+  CAM_RATE_LIMIT_PER_MIN: "120"
+  CAM_HEALTHCHECK_INTERVAL_S: "300"
+  CAM_RESYNC_INTERVAL_S: "3600"
+  CAM_SESSION_IDLE_TIMEOUT_S: "600"
+  CAM_LOG_LEVEL: "INFO"
