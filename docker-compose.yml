@@ -19,10 +19,14 @@ services:
   app:
     build: .
     ports:
-      - "8000:8000"
+      - "8001:8000"
     environment:
-      CAM_ENV: dev
-      CAM_DATABASE_URL: postgresql+asyncpg://cam:cam@db:5432/cam
+      CAM_ENV: ${CAM_ENV:-dev}
+      CAM_DATABASE_URL: ${CAM_DATABASE_URL:-postgresql+asyncpg://cam:cam@db:5432/cam}
+      CAM_ENCRYPTION_KEYS: ${CAM_ENCRYPTION_KEYS}
+      CAM_ENCRYPTION_KEY_CURRENT: ${CAM_ENCRYPTION_KEY_CURRENT:-v1}
+      CAM_SESSION_SECRET: ${CAM_SESSION_SECRET}
+      CAM_BASE_URL: ${CAM_BASE_URL:-http://localhost:8001}
     depends_on:
       db:
         condition: service_healthy
