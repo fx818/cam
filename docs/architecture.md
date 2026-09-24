@@ -525,7 +525,7 @@ All routes are JSON under `/api`. Lists use cursor pagination (`?cursor=&limit=`
 | Auth | `POST /auth/login`, `POST /auth/logout`, `GET /auth/me` |
 | Tokens | `GET /tokens`, `POST /tokens` (returns the raw token once), `DELETE /tokens/{id}` |
 | Services | `GET /services` (grouped as on My services), `POST /services` (personal), `POST /services/test` (test a draft), `GET/PATCH/DELETE /services/{id}`, `POST /services/{id}/resync`, `GET /services/{id}/tools`, `PATCH /tools/{id}` |
-| Connections | `POST /services/{id}/connect` (starts OAuth or stores a secret), `GET /oauth/callback`, `POST /connections/{id}/rotate` |
+| Connections | `POST /services/{ref}/connect` (starts OAuth or stores a secret; accepts UUID or `global/<slug>`; also aliased at `POST /services/{owner}/{slug}/connect`), `GET /oauth/callback`, `POST /connections/{id}/rotate` |
 | Shares | `GET/POST /connections/{id}/shares`, `DELETE /shares/{id}` |
 | Skills | `GET/POST /skills`, `GET/PATCH/DELETE /skills/{id}`, `POST /skills/{id}/versions`, `GET /skills/{id}/versions`, `POST /skills/{id}/rollback`, `GET/POST /skills/{id}/shares` |
 | Audit | `GET /audit` (filters: date, agent, service, status, scope=mine or my\_services), `GET /audit/{id}` |
@@ -662,22 +662,22 @@ An end-to-end slice with no dashboard; admin tasks use a CLI.
 
 ### Phase 3: REST services, OAuth and templates
 
-- [ ] 3.1 REST executor: build requests from `rest_binding`, inject the credential, normalize the response
-- [ ] 3.2 OpenAPI import with endpoint selection
-- [ ] 3.3 Manual REST tool definitions
-- [ ] 3.4 Auth types: none, header or bearer, API key, basic
-- [ ] 3.5 OAuth, both plain OAuth2 and MCP-spec OAuth (discovery and dynamic client registration): authorization code with PKCE, encrypted token storage, refresh before calls, "needs reconnect" error
-- [ ] 3.6 Templates: one admin definition, a connection per user, shareable connections
+- [x] 3.1 REST executor: build requests from `rest_binding`, inject the credential, normalize the response
+- [x] 3.2 OpenAPI import with endpoint selection
+- [x] 3.3 Manual REST tool definitions
+- [x] 3.4 Auth types: none, header or bearer, API key, basic
+- [x] 3.5 OAuth, both plain OAuth2 and MCP-spec OAuth (discovery and dynamic client registration): authorization code with PKCE, encrypted token storage, refresh before calls, "needs reconnect" error
+- [x] 3.6 Templates: one admin definition, a connection per user, shareable connections
 
 **Done when:** a REST API imported from OpenAPI works end to end, and two users each connect their own Notion through one template and call it through CAM.
 
 ### Phase 4: Dashboard
 
-- [ ] 4.1 Scaffold: React, Vite, TypeScript, shadcn/ui, a typed client generated from FastAPI's OpenAPI, UI served by FastAPI
-- [ ] 4.2 Dashboard auth behind the pluggable AuthProvider interface: HTTP-only session cookie with CSRF protection and login lockout
-- [ ] 4.3 User screens, in order: My services; Agent setup (tokens and configs); Service detail; Register wizard; Activity log
-- [ ] 4.4 Admin screens: users and teams, global services, templates, settings (including the URL allowlist)
-- [ ] 4.5 Retire the CLI except for bootstrapping the first admin
+- [x] 4.1 Scaffold: React, Vite, TypeScript, shadcn/ui, a typed client generated from FastAPI's OpenAPI, UI served by FastAPI
+- [x] 4.2 Dashboard auth behind the pluggable AuthProvider interface: HTTP-only session cookie with CSRF protection and login lockout
+- [x] 4.3 User screens, in order: My services; Agent setup (tokens and configs); Service detail; Register wizard; Activity log
+- [x] 4.4 Admin screens: users and teams, global services, templates, settings (including the URL allowlist)
+- [x] 4.5 Retire the CLI except for bootstrapping the first admin
 
 **Done when:** someone new can log in, connect Notion, generate a token and use CAM from Claude Code without the CLI.
 

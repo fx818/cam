@@ -117,6 +117,37 @@ Phase 1 **Done when** (automated): two global MCP services (mock stand-ins for W
 
 Phase 2 **Done when** (automated): as above. **Manual check for owner:** Claude Code + CAM token where B holds a share to A's personal service; invoke; remove share → next call `NOT_FOUND`; deactivate A → `OWNER_DEACTIVATED`.
 
+## 2026-09-24 — Phase 3: REST services, OAuth and templates
+
+- **3.1** REST executor (`upstream/rest.py`): request building from `rest_binding`, credential overlay, validated redirects (max 3 hops), status→`UPSTREAM_*` mapping; `access/credentials.py` `CredentialMaterial`/`resolve_credential`; pipeline branches REST-vs-MCP keeping a shared error/audit/truncation path. Mock REST fixture (`tests/fixtures/mock_rest/`).
+- **3.2** OpenAPI import (`registry/openapi.py`): fetch + openapi-spec-validator, operations → tools with `rest_binding`, `preview_openapi` endpoint selection for large specs.
+- **3.3** Manual REST tool definitions (`registry/rest_tools.py`) with binding dry-run, exposed at `POST /api/services/{owner}/{slug}/tools`.
+- **3.4** Unified `register_service` (all tiers/kinds; none/static-header/bearer/api-key(header|query)/basic), `POST /api/services` + `POST /api/services/test`.
+- **3.5** OAuth: plain OAuth2 + MCP-spec (RFC 9728→8414 discovery, RFC 7591 DCR), PKCE S256, `oauth_states` single-use 10-min (migration `e8a1c4f27b93`), encrypted token storage, refresh under `SELECT … FOR UPDATE` → `needs_reconnect` + `CONNECTION_EXPIRED` with owner-named message; connect routes (`/api/services/{ref}/connect` + `/api/services/{owner}/{slug}/connect`) and `GET /api/oauth/callback`; mock OAuth AS (`tests/fixtures/mock_oauth/`). Only `upstream/` opens sockets (`oauth_http.py`); Authlib used for OAuth protocol pieces only.
+- **3.6** Templates: admin `POST /api/admin/services`; per-user connections via connect; template refs `global/<slug>`; `resolve_connection` own→shared→disabled; `ServiceSummary` gains `service_id/kind/connected`; done-when e2e `tests/gateway/test_phase3_done_when.py` (REST OpenAPI import e2e + two users connect own Notion via mock OAuth through ONE template).
+
+Phase 3 **Done when** (automated): as above. **Manual check for owner:** connect a real OAuth service (Notion) from the dashboard, let its token expire, confirm the reconnect prompt and error copy.
+
+## 2026-09-24 — Phase 4: Dashboard (merged from branch `phase-4`)
+
+- **4.1** Vite/React/TS scaffold, shadcn/ui components, typed OpenAPI client (`web`), SPA served by FastAPI, CSRF fetch helper.
+- **4.2** Pluggable `AuthProvider`; HTTP-only session cookie (+CSRF double-submit middleware, lockout 5/15min). Login UI + vitest.
+- **4.3** User screens: My Services (groups/health), Agent Setup (one-time raw token + copy-ready Claude/JSON configs), Service Detail (permission-gated tabs), Register wizard, Activity Log, Skills shell.
+- **4.4** Admin APIs + screens: Users/Teams (create/reset/deactivate, self-demote + last-admin guards), Global Services, Templates, Overview, Settings + URL allowlist (org settings in `orgs.settings`).
+- **4.5** CLI retired to `create-admin` + `--version` only.
+
+Phase 4 **Done when** (automated partial): login→token→register→audit API tests + vitest; build/tsc green. **Manual check for owner:** `docker compose up --build -d`, `uv run cam create-admin --email …`, browser login, connect Notion, generate token, use CAM from Claude Code — no CLI.
+
+Merge reconciliation: unified dual-auth `api/deps.py` (bearer-first, then session cookie), combined router set incl. `services_create`/`connect`/`admin_services` (Phase 3) and auth/tokens/services/connections/audit/skills/admin_* (Phase 4), merged test helpers (bearer + CSRF paths). 419 passed, 3 skipped, vitest 14, `npm run build` green.
+
+## 2026-09-24 — Phases 3+4 (coordinator resolutions)
+
+- **Unconnected-template copy** confirmed: `This template needs a connection. Connect your own {name} credentials in the CAM dashboard.`; expired-personal copy per spec wording table.
+- **Connect route kept in both forms**: `POST /api/services/{ref}/connect` and `POST /api/services/{owner}/{slug}/connect` (doc table updated below).
+- **Template sharing** resolves shares on the owner-user connection of the template service (all-or-nothing semantics preserved).
+- **Dashboard password min length 8** for admin-set passwords (defense-in-depth; CLI bootstrap stays non-empty).
+- **`POST …/resync`** returns 501 until Phase 5.3 lands.
+
 ## Open questions
 
 Resolved by coordinator (2026-09-24, Phase 2):
