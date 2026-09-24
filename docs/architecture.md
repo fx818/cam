@@ -643,9 +643,9 @@ An end-to-end slice with no dashboard; admin tasks use a CLI.
 - [x] 1.2 Security basics: per-org data keys wrapped by a master key, AES-GCM credential encryption with `key_version`, argon2 passwords, token generation storing only the hash
 - [x] 1.3 Admin CLI: create a user, issue a token, register a global MCP with static-header auth
 - [x] 1.4 Upstream MCP client: Streamable HTTP and SSE, `tools/list` import, session pool keyed by service and credential
-- [ ] 1.5 CAM MCP server: the `cam` tool with `list_services`, `list_tools`, `describe`, `invoke`; routing instructions; per-user tool description
-- [ ] 1.6 Invoke pipeline: authenticate, resolve, inject credential, validate args, 60s timeout, 50,000-token cap, error mapping, no retries, per-token rate limit
-- [ ] 1.7 Audit log: async writer with full args and the agent name from `clientInfo`
+- [x] 1.5 CAM MCP server: the `cam` tool with `list_services`, `list_tools`, `describe`, `invoke`; routing instructions; per-user tool description
+- [x] 1.6 Invoke pipeline: authenticate, resolve, inject credential, validate args, 60s timeout, 50,000-token cap, error mapping, no retries, per-token rate limit
+- [x] 1.7 Audit log: async writer with full args and the agent name from `clientInfo`
 
 **Done when:** Claude Code, connected with a CAM token, lists and invokes tools on two real global MCPs (e.g. Windmill and Grafana), and every call appears in `audit_logs`.
 

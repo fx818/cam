@@ -84,16 +84,44 @@ Notable: `audit_logs` is a normal table now; monthly partitions land in Phase 5.
 
 Notable: MCP client uses `mode="legacy"` so the GET SSE channel delivers `notifications/tools/list_changed` (auto mode drops them). Sessions run on a dedicated owner task (SDK task-group exit constraint). Merged from parallel branch `phase-1b`; combined suite 115 passed.
 
+## 2026-09-24 — Phase 1.5: CAM MCP gateway at /mcp
+
+- `ServiceVisibility` model + migration; `access/` resolution (`parse_service_ref`, `resolve_service/tool`, `list_services/tools`, `ServiceNotFound`/`ServiceDisabled`, `resolve_org_connection`) as the single security boundary.
+- `gateway/`: bearer auth middleware (401 before MCP session), MCP server at `/mcp`, single `cam` tool (`list_services|list_tools|describe|invoke|skills*`), per-user tool description from `list_services`, routing instructions from `orgs.settings`.
+- Invoke pipeline skeleton with error envelope `{"error":{code,message,service,retryable}}`; `CamResult`/`GatewayDeps`/`AgentInfo`.
+- Tests: access resolution 12, gateway e2e 25 (incl. full Phase 1 done-when flow with two mock global MCPs).
+
+## 2026-09-24 — Phase 1.6: invoke pipeline hardening
+
+- `access/credentials.py`: bearer/static-header/none injection → `UPSTREAM_AUTH` on failure.
+- `invoke/validation.py` (jsonschema), `truncation.py` (50k-token cap, array whole-item cut + spec notes), `rate_limit.py` (120/min/token → `CAM_RATE_LIMITED`).
+- Per-service `timeout_ms`, no-retry; credentials injected only after audit args captured.
+- Tests: invoke unit modules + hardening e2e.
+
+## 2026-09-24 — Phase 1.7: async audit log
+
+- `audit/writer.py`: bounded queue, background batch drain, flush-on-shutdown; one `audit_logs` row per cam call with full args (pre-credential), agent name/version from `clientInfo`, latency_ms, response_bytes, truncated, status/error fields.
+- Wired into app lifespan (`start` before serve, `aclose` in finally).
+- Tests: writer unit (6) + gateway audit e2e (5, incl. no-secrets-in-args).
+
+Phase 1 **Done when** (automated): two global MCP services (mock stand-ins for Windmill/Grafana) registered, listed, described and invoked through `/mcp` with a CAM token; every call appears in `audit_logs` — covered in `tests/gateway/`. **Manual check for owner:** repeat with Claude Code against two real global MCPs (e.g. Windmill and Grafana) and confirm rows in `audit_logs`. Suite: 206 passed.
+
 ## Open questions
 
-Resolved by coordinator (2026-09-24):
+Resolved by coordinator (2026-09-24, Phase 1.1–1.3):
 
 - **Runtime `settings` table stays global** (key/value, no `org_id`). Per-org configuration lives in `orgs.settings` JSONB. Matches the Data model table; revisit only if multi-org SaaS needs per-org runtime defaults.
 - **Password rules:** non-empty only; no minimum length. Admins set passwords and there is no self-service change path (locked decision).
 - **Repeated `create-admin`:** allowed (multiple admins fine); duplicate email fails with a clear error.
 - **CLI/env:** CLI reads the same `CAM_*` Settings/env as the app; `.env.example` already documents them.
 
-Still open (from 1.4, non-blocking):
+Resolved by coordinator (2026-09-24, Phase 1.5–1.7):
 
-- MCP SDK `mode="legacy"` hard-coded to receive `list_changed`; revisit if a modern-only server appears.
-- Mock MCP fixture: third start/stop cycle in one process races the streamable-HTTP app — tests use a session-scoped fixture.
+- **DNS rebinding protection off** on the MCP server for local/tests; re-enable evaluation in Phase 7/8 hardening.
+- **No IndiaMART hardcoding** in gateway — server instructions/descriptions come from `orgs.settings` (confirmed by scan).
+- **Skills actions stubbed** until Phase 6 — schema already final so it won't change.
+- **Audit `service_id` null** on pre-resolution failures (NOT_FOUND, early rate-limit) — acceptable; user/token/action still recorded.
+- **Non-invoke `args=None`; invoke without args `{}`** — intended as implemented.
+- **Partitioning still deferred to Phase 5.6** — accurate.
+
+Still open (from 1.4, non-blocking): MCP SDK `mode="legacy"` for `list_changed`; mock MCP third start/stop race (session-scoped fixture).
