@@ -1,4 +1,4 @@
-import { FileText, LayoutGrid, LifeBuoy, ScrollText, Settings, Shield, Sparkles, Terminal, Users } from "lucide-react"
+import { FileText, LayoutGrid, LifeBuoy, ScrollText, Settings, Shield, Sparkles, Terminal, UserCheck, Users } from "lucide-react"
 import { NavLink, Outlet } from "react-router-dom"
 
 import { Button } from "@/components/ui/button"
@@ -17,6 +17,7 @@ const adminNav = [
   { to: "/admin/users", label: "Users and teams", icon: Users },
   { to: "/admin/services", label: "Global services", icon: Shield },
   { to: "/admin/templates", label: "Templates", icon: FileText },
+  { to: "/admin/review-queue", label: "Review queue", icon: UserCheck },
   { to: "/admin/overview", label: "Org overview", icon: LifeBuoy },
   { to: "/admin/settings", label: "Settings", icon: Settings },
 ]

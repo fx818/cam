@@ -15,6 +15,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from cam.api.csrf import CsrfMiddleware
 from cam.api.errors import install_error_handlers
 from cam.api.routes.admin_overview import router as admin_overview_router
+from cam.api.routes.admin_review_queue import router as admin_review_queue_router
 from cam.api.routes.admin_services import router as admin_services_router
 from cam.api.routes.admin_settings import router as admin_settings_router
 from cam.api.routes.admin_users import router as admin_users_router
@@ -190,6 +191,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(admin_settings_router)
     app.include_router(admin_services_router)
     app.include_router(admin_overview_router)
+    app.include_router(admin_review_queue_router)
     app.router.routes.append(Route("/mcp", endpoint=gateway, methods=["GET", "POST", "DELETE"]))
     mount_web(app)
     return app

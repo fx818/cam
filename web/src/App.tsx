@@ -11,6 +11,7 @@ import { RegisterServicePage } from "@/pages/RegisterServicePage"
 import { ServiceDetailPage } from "@/pages/ServiceDetailPage"
 import { SkillsPage } from "@/pages/SkillsPage"
 import { AdminOverviewPage } from "@/pages/admin/AdminOverviewPage"
+import { AdminReviewQueuePage } from "@/pages/admin/AdminReviewQueuePage"
 import { AdminSettingsPage } from "@/pages/admin/AdminSettingsPage"
 import { AdminServicesPage, AdminTemplatesPage } from "@/pages/admin/AdminServicesPage"
 import { AdminUsersPage } from "@/pages/admin/AdminUsersPage"
@@ -86,6 +87,14 @@ export function AppRoutes() {
           element={
             <RequireAdmin>
               <AdminTemplatesPage />
+            </RequireAdmin>
+          }
+        />
+        <Route
+          path="/admin/review-queue"
+          element={
+            <RequireAdmin>
+              <AdminReviewQueuePage />
             </RequireAdmin>
           }
         />

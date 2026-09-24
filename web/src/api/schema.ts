@@ -117,7 +117,8 @@ export interface paths {
         /** Get Services */
         get: operations["get_services_api_services_get"];
         put?: never;
-        post?: never;
+        /** Create Service */
+        post: operations["create_service_api_services_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -153,7 +154,8 @@ export interface paths {
         /** Get Service Tools */
         get: operations["get_service_tools_api_services__owner___slug__tools_get"];
         put?: never;
-        post?: never;
+        /** Create Service Tool */
+        post: operations["create_service_tool_api_services__owner___slug__tools_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -188,6 +190,74 @@ export interface paths {
         put?: never;
         /** Resync Service */
         post: operations["resync_service_api_services__owner___slug__resync_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/services/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Test Service */
+        post: operations["test_service_api_services_test_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/services/{ref}/connect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Connect Service */
+        post: operations["connect_service_api_services__ref__connect_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/services/{owner}/{slug}/connect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Connect Service Ref */
+        post: operations["connect_service_ref_api_services__owner___slug__connect_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/oauth/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Oauth Callback */
+        get: operations["oauth_callback_api_oauth_callback_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -454,6 +524,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/services": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Template */
+        post: operations["create_template_api_admin_services_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/overview": {
         parameters: {
             query?: never;
@@ -465,6 +552,40 @@ export interface paths {
         get: operations["get_overview_api_admin_overview_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/review-queue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Review Queue */
+        get: operations["get_review_queue_api_admin_review_queue_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/review-queue/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Approve Review Queue Items */
+        post: operations["approve_review_queue_items_api_admin_review_queue_approve_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -506,6 +627,130 @@ export interface components {
             pattern: string;
             /** Note */
             note?: string | null;
+        };
+        /** ApproveBody */
+        ApproveBody: {
+            /** Tool Ids */
+            tool_ids: string[];
+        };
+        /** ConnectBody */
+        ConnectBody: {
+            /** Credential */
+            credential?: string | null;
+        };
+        /** CreateServiceBody */
+        CreateServiceBody: {
+            /** Slug */
+            slug: string;
+            /** Name */
+            name: string;
+            /** Url */
+            url: string;
+            /** Transport */
+            transport?: ("streamable-http" | "sse") | null;
+            /**
+             * Auth Type
+             * @default none
+             * @enum {string}
+             */
+            auth_type: "none" | "static-header" | "bearer" | "api-key" | "basic" | "oauth";
+            /** Header Name */
+            header_name?: string | null;
+            /** Credential */
+            credential?: string | null;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            /** Timeout Ms */
+            timeout_ms?: number | null;
+            /** Response Cap Tokens */
+            response_cap_tokens?: number | null;
+            /**
+             * Kind
+             * @default mcp
+             * @enum {string}
+             */
+            kind: "mcp" | "rest";
+            /** Spec Url */
+            spec_url?: string | null;
+            /** Api Key Name */
+            api_key_name?: string | null;
+            /** Api Key In */
+            api_key_in?: ("header" | "query") | null;
+            /** Username */
+            username?: string | null;
+            /** Tools */
+            tools?: string[] | null;
+        };
+        /** CreateTemplateBody */
+        CreateTemplateBody: {
+            /** Slug */
+            slug: string;
+            /** Name */
+            name: string;
+            /** Url */
+            url: string;
+            /** Transport */
+            transport?: ("streamable-http" | "sse") | null;
+            /**
+             * Auth Type
+             * @default none
+             * @enum {string}
+             */
+            auth_type: "none" | "static-header" | "bearer" | "api-key" | "basic" | "oauth";
+            /** Header Name */
+            header_name?: string | null;
+            /** Credential */
+            credential?: string | null;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            /** Timeout Ms */
+            timeout_ms?: number | null;
+            /** Response Cap Tokens */
+            response_cap_tokens?: number | null;
+            /**
+             * Kind
+             * @default mcp
+             * @enum {string}
+             */
+            kind: "mcp" | "rest";
+            /** Spec Url */
+            spec_url?: string | null;
+            /** Api Key Name */
+            api_key_name?: string | null;
+            /** Api Key In */
+            api_key_in?: ("header" | "query") | null;
+            /** Username */
+            username?: string | null;
+            /** Tools */
+            tools?: string[] | null;
+        };
+        /** DefineToolBody */
+        DefineToolBody: {
+            /** Name */
+            name: string;
+            /** Method */
+            method: string;
+            /** Path */
+            path: string;
+            /** Params */
+            params?: {
+                [key: string]: string;
+            } | null;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            /** Input Schema */
+            input_schema?: {
+                [key: string]: unknown;
+            } | null;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -823,6 +1068,41 @@ export interface operations {
             };
         };
     };
+    create_service_api_services_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateServiceBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_service_api_services__owner___slug__get: {
         parameters: {
             query?: never;
@@ -963,6 +1243,44 @@ export interface operations {
             };
         };
     };
+    create_service_tool_api_services__owner___slug__tools_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                owner: string;
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DefineToolBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     patch_tool_api_tools__tool_id__patch: {
         parameters: {
             query?: never;
@@ -1021,6 +1339,150 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    test_service_api_services_test_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateServiceBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    connect_service_api_services__ref__connect_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ref: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ConnectBody"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    connect_service_ref_api_services__owner___slug__connect_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                owner: string;
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ConnectBody"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    oauth_callback_api_oauth_callback_get: {
+        parameters: {
+            query?: {
+                code?: string | null;
+                state?: string | null;
+                error?: string | null;
+                error_description?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -1681,6 +2143,41 @@ export interface operations {
             };
         };
     };
+    create_template_api_admin_services_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateTemplateBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_overview_api_admin_overview_get: {
         parameters: {
             query?: {
@@ -1691,6 +2188,63 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_review_queue_api_admin_review_queue_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    approve_review_queue_items_api_admin_review_queue_approve_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApproveBody"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
