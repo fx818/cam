@@ -12,11 +12,13 @@ from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.helpers import ApiEnv, UserEnv
+from cam.access.shares import add_share
 from cam.accounts.users import create_user
 from cam.api.main import create_app
 from cam.connections.orgs import ensure_org
 from cam.connections.tokens import create_token
-from cam.db.models import LoginAttempt, Org, User
+from cam.db.models import Connection, LoginAttempt, Org, Service, Share, Tool, User
+from cam.registry.services import register_global_mcp, register_personal_mcp
 
 
 @asynccontextmanager
@@ -125,3 +127,119 @@ async def user_token(db_session: AsyncSession, api_user: User) -> str:
     )
     await db_session.commit()
     return raw
+
+
+@pytest.fixture
+async def second_password() -> str:
+    return f"pw-{uuid.uuid4().hex}"
+
+
+@pytest.fixture
+async def second_user(db_session: AsyncSession, org: Org, second_password: str) -> User:
+    suffix = uuid.uuid4().hex[:10]
+    user = await create_user(
+        db_session,
+        email=f"other-{suffix}@example.com",
+        password=second_password,
+        role="user",
+    )
+    await db_session.commit()
+    return user
+
+
+@pytest.fixture
+async def personal_service(db_session: AsyncSession, api_user: User) -> tuple[Service, Connection]:
+    suffix = uuid.uuid4().hex[:8]
+    service, connection = await register_personal_mcp(
+        db_session,
+        owner=api_user,
+        slug=f"team-{suffix}",
+        name="Team API",
+        url="https://example.com/mcp",
+        transport="streamable-http",
+        auth_type="bearer",
+        credential="orig-secret",
+    )
+    await db_session.commit()
+    return service, connection
+
+
+@pytest.fixture
+async def global_service(db_session: AsyncSession) -> tuple[Service, Connection]:
+    suffix = uuid.uuid4().hex[:8]
+    service, connection = await register_global_mcp(
+        db_session,
+        slug=f"gs-{suffix}",
+        name="Global Mock",
+        url="https://example.com/mcp",
+        transport="streamable-http",
+        auth_type="static-header",
+        header_name="X-Api-Key",
+        credential="global-secret",
+    )
+    await db_session.commit()
+    return service, connection
+
+
+@pytest.fixture
+async def template_service(db_session: AsyncSession, org: Org) -> Service:
+    suffix = uuid.uuid4().hex[:8]
+    service = Service(
+        org_id=org.id,
+        tier="template",
+        owner_user_id=None,
+        slug=f"tmpl-{suffix}",
+        name="Notion",
+        description="Template service",
+        kind="mcp",
+        url="https://example.com/mcp",
+        transport="streamable-http",
+        auth_type="oauth",
+        auth_config={},
+        visibility="all",
+        status="active",
+        health="unknown",
+    )
+    db_session.add(service)
+    await db_session.flush()
+    await db_session.commit()
+    return service
+
+
+@pytest.fixture
+async def personal_tool(
+    db_session: AsyncSession, personal_service: tuple[Service, Connection]
+) -> Tool:
+    service, _connection = personal_service
+    tool = Tool(
+        org_id=service.org_id,
+        service_id=service.id,
+        name="echo",
+        upstream_name="echo",
+        description="Echo the input",
+        input_schema={"type": "object"},
+        enabled=True,
+        status="active",
+    )
+    db_session.add(tool)
+    await db_session.flush()
+    await db_session.commit()
+    return tool
+
+
+@pytest.fixture
+async def active_share(
+    db_session: AsyncSession,
+    api_user: User,
+    second_user: User,
+    personal_service: tuple[Service, Connection],
+) -> Share:
+    _service, connection = personal_service
+    share = await add_share(
+        db_session,
+        connection_id=connection.id,
+        grantee_user_id=second_user.id,
+        actor=api_user,
+    )
+    await db_session.commit()
+    return share

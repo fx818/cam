@@ -13,8 +13,13 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from cam.api.csrf import CsrfMiddleware
 from cam.api.errors import install_error_handlers
+from cam.api.routes.audit import router as audit_router
 from cam.api.routes.auth import router as auth_router
+from cam.api.routes.connections import router as connections_router
 from cam.api.routes.health import router as health_router
+from cam.api.routes.services import router as services_router
+from cam.api.routes.skills import router as skills_router
+from cam.api.routes.tokens import router as tokens_router
 from cam.audit.writer import AuditWriter
 from cam.auth import default_auth_provider
 from cam.config import Settings
@@ -125,6 +130,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.auth_provider = default_auth_provider()
     app.include_router(auth_router)
     app.include_router(health_router)
+    app.include_router(tokens_router)
+    app.include_router(services_router)
+    app.include_router(connections_router)
+    app.include_router(audit_router)
+    app.include_router(skills_router)
     app.router.routes.append(Route("/mcp", endpoint=gateway, methods=["GET", "POST", "DELETE"]))
     mount_web(app)
     return app
