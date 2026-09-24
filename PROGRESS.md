@@ -42,6 +42,16 @@ Notable: dev generates fresh encryption keys each process start — any credenti
 
 Notable: asyncpg has no type stubs, so admin/DB work in tests goes through SQLAlchemy only; pyright strict covers `alembic/` too.
 
+## 2026-09-24 — Phase 0.5: CI
+
+- `.github/workflows/ci.yml`: on every push and PR — `uv sync --frozen`, `ruff check`, `ruff format --check`, `pyright`, `pytest`, with a Postgres 16 service container (health-checked). Tests create/migrate `cam_test` themselves via the conftest fixture; `CAM_TEST_DATABASE_URL` points CI at the service DB.
+- Tests asserting the CI workflow runs all four checks and that docker-compose defines both services with healthchecks (partial automation of Phase 0's "Done when").
+- All checks green locally: `ruff check`, `ruff format --check`, `pyright` (strict), `pytest` — 22 passed.
+
+Manual checks for the owner:
+1. `docker compose up --build -d`, wait for healthy, `curl http://localhost:8000/api/health` → 200 `{"status":"ok"}`, then `docker compose down`.
+2. Push the repo to GitHub and confirm the CI workflow goes green (no remote is configured in this clone, so CI itself could not be executed here).
+
 ## Open questions
 
 _None._

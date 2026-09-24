@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: cam
+          POSTGRES_PASSWORD: cam
+          POSTGRES_DB: cam
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U cam -d cam"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Install dependencies
+        run: uv sync --frozen
+      - name: ruff check
+        run: uv run ruff check
+      - name: ruff format
+        run: uv run ruff format --check
+      - name: pyright
+        run: uv run pyright
+      - name: pytest
+        run: uv run pytest
+        env:
+          CAM_TEST_DATABASE_URL: postgresql+asyncpg://cam:cam@localhost:5432/cam_test

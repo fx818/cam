@@ -631,7 +631,7 @@ Phases 0 to 2 run in order. Phases 3 and 4 can overlap once 2 is done, and 5 and
 - [x] 0.2 Local stack: `docker-compose` with Postgres 16 and a FastAPI app with a health endpoint
 - [x] 0.3 Config from env vars (DB URL, encryption key, defaults); the key is never committed
 - [x] 0.4 DB plumbing: async SQLAlchemy, Alembic migrations, a test database
-- [ ] 0.5 CI: lint, type check and tests on every push
+- [x] 0.5 CI: lint, type check and tests on every push
 
 **Done when:** `docker compose up` starts CAM and Postgres, and CI passes.
 
