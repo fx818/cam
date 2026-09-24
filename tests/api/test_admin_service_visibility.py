@@ -50,6 +50,24 @@ async def _grant(
     )
 
 
+async def test_admin_can_register_global_tier(api: ApiEnv, admin_token: str) -> None:
+    slug = f"glob-{uuid.uuid4().hex[:8]}"
+    create = await post_json(
+        api.client,
+        "/api/admin/services",
+        {
+            "slug": slug,
+            "name": "Global service",
+            "url": "https://mcp.example.com/mcp",
+            "transport": "streamable-http",
+            "tier": "global",
+        },
+        token=admin_token,
+    )
+    assert create.status_code == 200, create.text
+    assert create.json()["service"]["tier"] == "global"
+
+
 async def test_admin_sets_visibility_restricted(api: ApiEnv, admin_token: str) -> None:
     service = await _create_service(api, admin_token)
     patch = await _patch_visibility(api, admin_token, service["id"], "restricted")

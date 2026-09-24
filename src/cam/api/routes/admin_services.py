@@ -47,6 +47,7 @@ class CreateTemplateBody(BaseModel):
     timeout_ms: int | None = Field(default=None, ge=1000, le=600_000)
     response_cap_tokens: int | None = Field(default=None, ge=100, le=1_000_000)
     kind: Literal["mcp", "rest"] = "mcp"
+    tier: Literal["global", "template"] = "template"
     spec_url: str | None = Field(default=None, max_length=2000)
     api_key_name: str | None = None
     api_key_in: Literal["header", "query"] | None = None
@@ -55,7 +56,7 @@ class CreateTemplateBody(BaseModel):
 
 
 @router.post("/services")
-async def create_template(
+async def create_org_service(
     request: Request, admin: AdminDep, body: CreateTemplateBody
 ) -> dict[str, Any]:
     session_factory = request.app.state.session_factory
@@ -63,7 +64,7 @@ async def create_template(
         try:
             service, _connection = await register_service(
                 db,
-                tier="template",
+                tier=body.tier,
                 slug=body.slug,
                 name=body.name,
                 url=body.url,
@@ -186,10 +187,26 @@ async def change_grant_visibility(
     session_factory = request.app.state.session_factory
     async with session_factory() as db:
         try:
-            if request.method == "DELETE":
-                await revoke_service_visibility(db, slug=slug, user_email=body.email)
-            else:
-                await grant_service_visibility(db, slug=slug, user_email=body.email)
+            await grant_service_visibility(db, slug=slug, user_email=body.email)
+            await db.commit()
+            return await _visibility_state(db, slug)
+        except ServiceError as exc:
+            await db.rollback()
+            raise _visibility_problem(exc) from None
+
+
+async def delete_grant_visibility(
+    request: Request,
+    admin: AdminDep,
+    slug: str,
+    body: VisibilityGrantBody,
+    owner: str = "",
+) -> dict[str, Any]:
+    _resolve_slug(owner)
+    session_factory = request.app.state.session_factory
+    async with session_factory() as db:
+        try:
+            await revoke_service_visibility(db, slug=slug, user_email=body.email)
             await db.commit()
             return await _visibility_state(db, slug)
         except ServiceError as exc:
@@ -224,7 +241,8 @@ def _register_visibility_routes() -> None:
         "/services/{owner}/{slug}/visibility/grant",
         "/services/{slug}/visibility/grant",
     ):
-        router.add_api_route(base, change_grant_visibility, methods=["POST", "DELETE"])
+        router.add_api_route(base, change_grant_visibility, methods=["POST"])
+        router.add_api_route(base, delete_grant_visibility, methods=["DELETE"])
     for base in (
         "/services/{owner}/{slug}/visibility/revoke",
         "/services/{slug}/visibility/revoke",
