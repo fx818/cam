@@ -639,10 +639,10 @@ Phases 0 to 2 run in order. Phases 3 and 4 can overlap once 2 is done, and 5 and
 
 An end-to-end slice with no dashboard; admin tasks use a CLI.
 
-- [ ] 1.1 Core tables, every one carrying org\_id, plus orgs with a default indiamart org: `users`, `cam_tokens`, `services`, `tools`, `connections`, `audit_logs`
-- [ ] 1.2 Security basics: per-org data keys wrapped by a master key, AES-GCM credential encryption with `key_version`, argon2 passwords, token generation storing only the hash
-- [ ] 1.3 Admin CLI: create a user, issue a token, register a global MCP with static-header auth
-- [ ] 1.4 Upstream MCP client: Streamable HTTP and SSE, `tools/list` import, session pool keyed by service and credential
+- [x] 1.1 Core tables, every one carrying org\_id, plus orgs with a default indiamart org: `users`, `cam_tokens`, `services`, `tools`, `connections`, `audit_logs`
+- [x] 1.2 Security basics: per-org data keys wrapped by a master key, AES-GCM credential encryption with `key_version`, argon2 passwords, token generation storing only the hash
+- [x] 1.3 Admin CLI: create a user, issue a token, register a global MCP with static-header auth
+- [x] 1.4 Upstream MCP client: Streamable HTTP and SSE, `tools/list` import, session pool keyed by service and credential
 - [ ] 1.5 CAM MCP server: the `cam` tool with `list_services`, `list_tools`, `describe`, `invoke`; routing instructions; per-user tool description
 - [ ] 1.6 Invoke pipeline: authenticate, resolve, inject credential, validate args, 60s timeout, 50,000-token cap, error mapping, no retries, per-token rate limit
 - [ ] 1.7 Audit log: async writer with full args and the agent name from `clientInfo`

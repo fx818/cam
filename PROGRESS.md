@@ -52,6 +52,48 @@ Manual checks for the owner:
 1. `docker compose up --build -d`, wait for healthy, `curl http://localhost:8000/api/health` → 200 `{"status":"ok"}`, then `docker compose down`.
 2. Push the repo to GitHub and confirm the CI workflow goes green (no remote is configured in this clone, so CI itself could not be executed here).
 
+## 2026-09-24 — Phase 1.1: core tables with org_id
+
+- Alembic migration `dd8d89a374eb`: `orgs` (settings JSONB, `data_key_enc`), `users`, `cam_tokens`, `services`, `tools`, `connections`, `audit_logs`, plus `url_allowlist` and `login_attempts`. Every table carries `org_id`; default org `indiamart` seeded. Per-org uniqueness for handles/slugs; email unique globally.
+- `src/cam/db/models.py` holds all ORM models; indexes on audit `(org_id, user_id, ts)`, `(org_id, owner_user_id, ts)`, `(org_id, service_id, ts)`.
+- `tests/conftest.py`: pinned dev encryption keys for tests + `db_session` fixture.
+- Tests: `tests/test_schema.py` covers constraints, seeds, tier/status enums — real Postgres.
+
+Notable: `audit_logs` is a normal table now; monthly partitions land in Phase 5.6.
+
+## 2026-09-24 — Phase 1.2: envelope encryption, argon2, token hashing
+
+- `src/cam/connections/crypto.py`: master keys from Settings; per-org data key wrapped by master (`orgs.data_key_enc`); AES-256-GCM for `connections.secret_enc`/`refresh_enc` and `services.auth_secret_enc` with `key_version`.
+- `src/cam/connections/orgs.py`: org bootstrap + data-key provisioning for `indiamart`.
+- `src/cam/connections/passwords.py`: argon2id hashing/verify (callers run blocking work in a thread pool).
+- `src/cam/connections/tokens.py`: `cam_` + 32 random base62 bytes; store SHA-256 hash only; `token_prefix` = first 8 chars after `cam_`; lookup/validate/revoke.
+- Tests: `tests/test_security.py` — round-trip, wrong-key failure, key_version, password verify, token create/lookup/revoked/reuse.
+
+## 2026-09-24 — Phase 1.3: admin CLI
+
+- `src/cam/cli.py` (click, console script `cam`): `create-admin`, `create-user`, `issue-token`, `register-global-mcp`. Thin CLI over service modules.
+- `src/cam/accounts/users.py`: user creation (handle from email, argon2, role/kind/status); `src/cam/registry/services.py`: global MCP registration with static-header/bearer/none auth, org credential encrypted on the null-user connection.
+- Duplicate email/handle → clear error; empty password rejected at CLI and service layer.
+- Tests: `tests/test_cli.py` end-to-end via CliRunner against real Postgres.
+
+## 2026-09-24 — Phase 1.4: upstream MCP client and session pool
+
+- `src/cam/upstream/`: Streamable HTTP + SSE client (`UpstreamSession`), session pool keyed by `(service_id, connection_id)` with reconnect-once on establish and never-resend after `tools/call`, idle reaper (default 600s from Settings), content normalization (text/JSON/images; 5-image and 5MB caps; audio/resources → notes), typed error mapping (`TIMEOUT`, `UPSTREAM_*`, `INTERNAL`) with ExceptionGroup flattening, and `admit_url` as the single outbound URL choke point for Phase 2.5.
+- Mock MCP fixture under `tests/fixtures/mock_mcp/` (both transports; echo/slow/huge/fail/image/structured tools; dynamic `add_dynamic_tool` + `list_changed`; optional bearer guard).
+- Tests: `tests/upstream/` — 39 tests (normalize, URL admission, client e2e both transports, timeout, pool reuse/invalidate/reconnect-once/no-retry/idle reap).
+
+Notable: MCP client uses `mode="legacy"` so the GET SSE channel delivers `notifications/tools/list_changed` (auto mode drops them). Sessions run on a dedicated owner task (SDK task-group exit constraint). Merged from parallel branch `phase-1b`; combined suite 115 passed.
+
 ## Open questions
 
-_None._
+Resolved by coordinator (2026-09-24):
+
+- **Runtime `settings` table stays global** (key/value, no `org_id`). Per-org configuration lives in `orgs.settings` JSONB. Matches the Data model table; revisit only if multi-org SaaS needs per-org runtime defaults.
+- **Password rules:** non-empty only; no minimum length. Admins set passwords and there is no self-service change path (locked decision).
+- **Repeated `create-admin`:** allowed (multiple admins fine); duplicate email fails with a clear error.
+- **CLI/env:** CLI reads the same `CAM_*` Settings/env as the app; `.env.example` already documents them.
+
+Still open (from 1.4, non-blocking):
+
+- MCP SDK `mode="legacy"` hard-coded to receive `list_changed`; revisit if a modern-only server appears.
+- Mock MCP fixture: third start/stop cycle in one process races the streamable-HTTP app — tests use a session-scoped fixture.
