@@ -35,16 +35,13 @@ def _database_name(url: str) -> tuple[str, str]:
     return base, name
 
 
-async def _ensure_database(url: str) -> None:
+async def _recreate_database(url: str) -> None:
     base, name = _database_name(url)
     engine = create_async_engine(f"{base}/postgres", isolation_level="AUTOCOMMIT")
     try:
         async with engine.connect() as conn:
-            result = await conn.execute(
-                text("SELECT 1 FROM pg_database WHERE datname = :name"), {"name": name}
-            )
-            if result.first() is None:
-                await conn.execute(text(f'CREATE DATABASE "{name}"'))
+            await conn.execute(text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
+            await conn.execute(text(f'CREATE DATABASE "{name}"'))
     finally:
         await engine.dispose()
 
@@ -56,7 +53,7 @@ def _upgrade_head() -> None:
 
 @pytest.fixture(scope="session", autouse=True)
 async def migrated_test_database() -> None:
-    await _ensure_database(TEST_DATABASE_URL)
+    await _recreate_database(TEST_DATABASE_URL)
     await asyncio.to_thread(_upgrade_head)
 
 

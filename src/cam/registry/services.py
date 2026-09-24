@@ -1,19 +1,22 @@
 import re
 from typing import Literal
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from cam.accounts.users import get_user_by_email
 from cam.config import Settings
 from cam.connections.crypto import MasterKeyRing, encrypt_secret, get_default_key_ring
 from cam.connections.orgs import ensure_org, get_org_data_key
-from cam.db.models import Connection, Service
+from cam.db.models import Connection, Service, ServiceVisibility
 
 McpTransport = Literal["streamable-http", "sse"]
 McpAuthType = Literal["none", "static-header", "bearer"]
+ServiceVisibilityLevel = Literal["all", "restricted"]
 
 _SLUG_PATTERN = re.compile(r"^[a-z0-9]+(?:[._-][a-z0-9]+)*$")
 _HTTP_SCHEMES = ("http://", "https://")
+_VISIBILITY_LEVELS = ("all", "restricted")
 
 
 class ServiceError(Exception):
@@ -119,3 +122,86 @@ async def register_global_mcp(
     session.add(connection)
     await session.flush()
     return service, connection
+
+
+async def _get_admin_service(session: AsyncSession, slug: str) -> Service:
+    resolved_slug = slug.strip().lower()
+    if not resolved_slug:
+        raise ServiceError("slug must not be empty")
+    org = await ensure_org(session)
+    result = await session.execute(
+        select(Service).where(
+            Service.org_id == org.id,
+            Service.tier.in_(("global", "template")),
+            Service.slug == resolved_slug,
+        )
+    )
+    service = result.scalar_one_or_none()
+    if service is None:
+        raise ServiceError(f"no global or template service with slug {resolved_slug!r}")
+    return service
+
+
+async def set_service_visibility(
+    session: AsyncSession, *, slug: str, visibility: ServiceVisibilityLevel
+) -> Service:
+    if visibility not in _VISIBILITY_LEVELS:
+        raise ServiceError("visibility must be all or restricted")
+    service = await _get_admin_service(session, slug)
+    service.visibility = visibility
+    await session.flush()
+    return service
+
+
+async def grant_service_visibility(session: AsyncSession, *, slug: str, user_email: str) -> Service:
+    service = await _get_admin_service(session, slug)
+    user = await get_user_by_email(session, user_email)
+    if user is None:
+        raise ServiceError(f"no user with email {user_email}")
+    if user.org_id != service.org_id:
+        raise ServiceError("user belongs to a different org than the service")
+    existing = await session.execute(
+        select(ServiceVisibility.id).where(
+            ServiceVisibility.org_id == service.org_id,
+            ServiceVisibility.service_id == service.id,
+            ServiceVisibility.user_id == user.id,
+        )
+    )
+    if existing.first() is not None:
+        raise ServiceError(f"user {user_email} already has visibility on {slug!r}")
+    session.add(
+        ServiceVisibility(
+            org_id=service.org_id,
+            service_id=service.id,
+            user_id=user.id,
+        )
+    )
+    await session.flush()
+    return service
+
+
+async def revoke_service_visibility(
+    session: AsyncSession, *, slug: str, user_email: str
+) -> Service:
+    service = await _get_admin_service(session, slug)
+    user = await get_user_by_email(session, user_email)
+    if user is None:
+        raise ServiceError(f"no user with email {user_email}")
+    existing = await session.execute(
+        select(ServiceVisibility.id).where(
+            ServiceVisibility.org_id == service.org_id,
+            ServiceVisibility.service_id == service.id,
+            ServiceVisibility.user_id == user.id,
+        )
+    )
+    if existing.first() is None:
+        raise ServiceError(f"user {user_email} has no visibility grant on {slug!r}")
+    await session.execute(
+        delete(ServiceVisibility).where(
+            ServiceVisibility.org_id == service.org_id,
+            ServiceVisibility.service_id == service.id,
+            ServiceVisibility.user_id == user.id,
+        )
+    )
+    await session.flush()
+    return service

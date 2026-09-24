@@ -18,7 +18,16 @@ from cam.config import Settings
 from cam.connections.orgs import DEFAULT_ORG_SLUG
 from cam.connections.tokens import create_token
 from cam.db.session import create_db_engine, create_session_factory
-from cam.registry.services import McpAuthType, McpTransport, ServiceError, register_global_mcp
+from cam.registry.services import (
+    McpAuthType,
+    McpTransport,
+    ServiceError,
+    ServiceVisibilityLevel,
+    grant_service_visibility,
+    register_global_mcp,
+    revoke_service_visibility,
+    set_service_visibility,
+)
 
 UserKindChoice = click.Choice(["person", "team"])
 TransportChoice = click.Choice(["streamable-http", "sse"])
@@ -204,6 +213,61 @@ def register_global_mcp_cmd(
     except IntegrityError:
         raise click.ClickException(f"service slug {slug!r} is already registered") from None
     click.echo(f"Registered global MCP: global/{service.slug}")
+
+
+@main.command("set-service-visibility")
+@click.option("--service", "slug", required=True, help="Service slug, e.g. redash.")
+@click.option(
+    "--visibility",
+    type=click.Choice(["all", "restricted"]),
+    required=True,
+    help="all: everyone in the org; restricted: only granted users.",
+)
+def set_service_visibility_cmd(slug: str, visibility: str) -> None:
+    """Set a global or template service's visibility."""
+
+    async def _apply(session: AsyncSession) -> None:
+        try:
+            service = await set_service_visibility(
+                session, slug=slug, visibility=cast(ServiceVisibilityLevel, visibility)
+            )
+        except ServiceError as exc:
+            raise click.ClickException(str(exc)) from exc
+        click.echo(f"global/{service.slug} visibility set to {service.visibility}")
+
+    asyncio.run(_with_session(_apply))
+
+
+@main.command("grant-service-visibility")
+@click.option("--service", "slug", required=True, help="Service slug, e.g. redash.")
+@click.option("--user", "user_email", required=True, help="Email of the user to grant access.")
+def grant_service_visibility_cmd(slug: str, user_email: str) -> None:
+    """Grant a specific user visibility on a restricted service."""
+
+    async def _apply(session: AsyncSession) -> None:
+        try:
+            service = await grant_service_visibility(session, slug=slug, user_email=user_email)
+        except ServiceError as exc:
+            raise click.ClickException(str(exc)) from exc
+        click.echo(f"Granted {user_email} access to global/{service.slug}")
+
+    asyncio.run(_with_session(_apply))
+
+
+@main.command("revoke-service-visibility")
+@click.option("--service", "slug", required=True, help="Service slug, e.g. redash.")
+@click.option("--user", "user_email", required=True, help="Email of the user to revoke.")
+def revoke_service_visibility_cmd(slug: str, user_email: str) -> None:
+    """Revoke a user's visibility grant on a service."""
+
+    async def _apply(session: AsyncSession) -> None:
+        try:
+            service = await revoke_service_visibility(session, slug=slug, user_email=user_email)
+        except ServiceError as exc:
+            raise click.ClickException(str(exc)) from exc
+        click.echo(f"Revoked {user_email} access to global/{service.slug}")
+
+    asyncio.run(_with_session(_apply))
 
 
 if __name__ == "__main__":

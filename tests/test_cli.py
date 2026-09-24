@@ -392,3 +392,76 @@ def test_cli_bootstrap_creates_default_org_data_key() -> None:
     org = asyncio.run(_run(fn))
     assert org.slug == "indiamart"
     assert org.data_key_enc is not None
+
+
+def test_service_visibility_cli_commands() -> None:
+    slug = _unique("viscli")
+    runner = CliRunner()
+    registered = runner.invoke(
+        main,
+        [
+            "register-global-mcp",
+            "--slug",
+            slug,
+            "--name",
+            "Visibility CLI",
+            "--url",
+            "https://viscli.example.com/mcp",
+            "--transport",
+            "streamable-http",
+            "--auth-type",
+            "none",
+        ],
+    )
+    assert registered.exit_code == 0, registered.output
+
+    email = f"{_unique('visuser')}@example.com"
+    created = runner.invoke(main, ["create-user", "--email", email, "--password", "pw-vis-12345"])
+    assert created.exit_code == 0, created.output
+
+    restricted = runner.invoke(
+        main,
+        ["set-service-visibility", "--service", slug, "--visibility", "restricted"],
+    )
+    assert restricted.exit_code == 0, restricted.output
+    assert "restricted" in restricted.output
+
+    granted = runner.invoke(
+        main,
+        ["grant-service-visibility", "--service", slug, "--user", email],
+    )
+    assert granted.exit_code == 0, granted.output
+    assert email in granted.output
+
+    duplicate = runner.invoke(
+        main,
+        ["grant-service-visibility", "--service", slug, "--user", email],
+    )
+    assert duplicate.exit_code == 1
+    assert "already has visibility" in duplicate.output
+
+    revoked = runner.invoke(
+        main,
+        ["revoke-service-visibility", "--service", slug, "--user", email],
+    )
+    assert revoked.exit_code == 0, revoked.output
+
+    missing = runner.invoke(
+        main,
+        ["revoke-service-visibility", "--service", slug, "--user", email],
+    )
+    assert missing.exit_code == 1
+    assert "no visibility grant" in missing.output
+
+    unknown_service = runner.invoke(
+        main,
+        [
+            "set-service-visibility",
+            "--service",
+            _unique("ghostsvc"),
+            "--visibility",
+            "all",
+        ],
+    )
+    assert unknown_service.exit_code == 1
+    assert "no global or template service" in unknown_service.output

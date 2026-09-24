@@ -78,11 +78,13 @@ def tool_ref(service: Service, tool: Tool) -> str:
     return f"{GLOBAL_OWNER}/{service.slug}/{tool.name}"
 
 
-async def _has_access(
+async def has_access(
     session: AsyncSession, identity: AuthenticatedIdentity, service: Service
 ) -> bool:
     if service.org_id != identity.org_id:
         return False
+    if service.tier == "personal":
+        return service.owner_user_id == identity.user.id
     if service.visibility == "all":
         return True
     result = await session.execute(
@@ -119,7 +121,7 @@ async def list_services(
     rows = (await session.execute(stmt)).all()
     allowed: list[tuple[Service, int]] = []
     for service, tool_count in rows:
-        if await _has_access(session, identity, service):
+        if await has_access(session, identity, service):
             allowed.append((service, tool_count))
     return [
         ServiceSummary(
@@ -152,7 +154,7 @@ async def resolve_service(
     service = result.scalar_one_or_none()
     if service is None:
         raise ServiceNotFound(ref)
-    if not await _has_access(session, identity, service):
+    if not await has_access(session, identity, service):
         raise ServiceNotFound(ref)
     if service.status != "active":
         raise ServiceDisabled(ref, audit_ref=AuditRef(service_id=service.id))
@@ -191,7 +193,7 @@ async def resolve_tool(
     service = result.scalar_one_or_none()
     if service is None:
         raise ServiceNotFound(tool_id)
-    if not await _has_access(session, identity, service):
+    if not await has_access(session, identity, service):
         raise ServiceNotFound(tool_id)
     if service.status != "active":
         raise ServiceDisabled(tool_id, audit_ref=AuditRef(service_id=service.id))
