@@ -106,7 +106,24 @@ Notable: MCP client uses `mode="legacy"` so the GET SSE channel delivers `notifi
 
 Phase 1 **Done when** (automated): two global MCP services (mock stand-ins for Windmill/Grafana) registered, listed, described and invoked through `/mcp` with a CAM token; every call appears in `audit_logs` — covered in `tests/gateway/`. **Manual check for owner:** repeat with Claude Code against two real global MCPs (e.g. Windmill and Grafana) and confirm rows in `audit_logs`. Suite: 206 passed.
 
+## 2026-09-24 — Phase 2: access model
+
+- **2.1** Tier-aware `has_access`; `set/grant/revoke_service_visibility`; CLI visibility commands. Tests 206 → 211.
+- **2.2** Personal services under `<handle>/<service>/<tool>`; `ResolvedService` + ref parsing; `register_personal_mcp`, `set_service_status`; CLI. Tests → 222.
+- **2.3** `shares` table (migration `4f2a9c81b6d7`); `access/shares.py` (add/revoke/list/active, share/unshare by ref+email); share join in `has_access`; `shared_by` on listings; CLI share/unshare. Tests → 228.
+- **2.4** `deactivate_user` (revoke tokens, disable connections, `SessionPool.invalidate_connection`); `OwnerDeactivated` → `OWNER_DEACTIVATED` with exact spec message; CLI `deactivate-user`. Tests → 236.
+- **2.5** URL policy: static admission at registration + DNS validation + IP pinning (SNI preserved) at session start; redirect hop validation; admin allowlist (hostname exact / CIDR); template-slug reservation; CLI allowlist commands. Notable fixes: blocked-networks tuple (was a draining generator), CIDR allowlist for literal IPs, registration DNS check added post-review (spec: check at registration **and** every request). Tests → 281.
+- **2.6** Done-when e2e `tests/gateway/test_phase2_done_when.py`: B invokes A's shared personal service over `/mcp`; revoke → immediate `NOT_FOUND`; deactivate A → `OWNER_DEACTIVATED`; stranger never sees the service. Tests → 283 (incl. registration DNS regression test).
+
+Phase 2 **Done when** (automated): as above. **Manual check for owner:** Claude Code + CAM token where B holds a share to A's personal service; invoke; remove share → next call `NOT_FOUND`; deactivate A → `OWNER_DEACTIVATED`.
+
 ## Open questions
+
+Resolved by coordinator (2026-09-24, Phase 2):
+
+- **URL-policy rejection surfaces as `UPSTREAM_UNAVAILABLE`** (not a new code). Spec's error enum is closed; do not add `URL_BLOCKED` without owner approval. Audit message carries the policy detail. Revisit in Phase 7 security review.
+- **No special admin bypass** for visibility/shares — admins manage config but do not implicitly reach restricted services. Matches pass-through model; confirmed intended.
+- **Allowlist semantics:** exact hostname exempts without DNS pin; CIDR exempts matching literal IPs **and** resolved IPs at request time (spec: "host or resolved IP"). Registration now also DNS-validates personal URLs (post-phase fix commit).
 
 Resolved by coordinator (2026-09-24, Phase 1.1–1.3):
 

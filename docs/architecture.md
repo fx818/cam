@@ -651,12 +651,12 @@ An end-to-end slice with no dashboard; admin tasks use a CLI.
 
 ### Phase 2: Access model
 
-- [ ] 2.1 Global visibility: everyone or specific users
-- [ ] 2.2 Personal services under `<handle>/<service>/<tool>`, registered through the CLI or API
-- [ ] 2.3 Sharing: the `shares` table, add and remove, checks at every step
-- [ ] 2.4 Deactivation: revoke tokens, disable connections, "owner deactivated" error
-- [ ] 2.5 Slug rules: unique slugs; personal slugs cannot reuse a template slug; URL policy checker with the admin allowlist
-- [ ] 2.6 A thorough access-control test suite, including cross-org isolation, since this is the main security boundary
+- [x] 2.1 Global visibility: everyone or specific users
+- [x] 2.2 Personal services under `<handle>/<service>/<tool>`, registered through the CLI or API
+- [x] 2.3 Sharing: the `shares` table, add and remove, checks at every step
+- [x] 2.4 Deactivation: revoke tokens, disable connections, "owner deactivated" error
+- [x] 2.5 Slug rules: unique slugs; personal slugs cannot reuse a template slug; URL policy checker with the admin allowlist
+- [x] 2.6 A thorough access-control test suite, including cross-org isolation, since this is the main security boundary
 
 **Done when:** user B can use A's shared service, loses access immediately when the share is removed or A is deactivated, and never sees services they have no access to.
 
