@@ -24,6 +24,7 @@ from cam.access import (
     resolve_org_connection,
     resolve_tool,
 )
+from cam.access.credentials import CredentialError, resolve_credential_headers
 from cam.config import Settings
 from cam.connections.tokens import AuthenticatedIdentity
 from cam.db.models import Tool
@@ -37,6 +38,9 @@ from cam.invoke.errors import (
     service_disabled,
     skills_unavailable,
 )
+from cam.invoke.rate_limit import RateLimiter
+from cam.invoke.truncation import truncate_blocks
+from cam.invoke.validation import validate_args
 from cam.upstream.errors import UpstreamError
 from cam.upstream.pool import SessionPool
 from cam.upstream.types import ConnectionTarget, ContentBlock, TextBlock
@@ -58,6 +62,7 @@ class CamResult:
     content: tuple[ContentBlock, ...] = ()
     structured: dict[str, Any] | None = None
     is_error: bool = False
+    truncated: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,6 +70,7 @@ class GatewayDeps:
     session_factory: async_sessionmaker[AsyncSession]
     pool: SessionPool
     settings: Settings
+    rate_limiter: RateLimiter
 
 
 def error_result(exc: CamError) -> CamResult:
@@ -166,6 +172,17 @@ async def _invoke(
     async with deps.session_factory() as session:
         resolved: ResolvedTool = await resolve_tool(session, identity, raw_id)
         connection = await resolve_org_connection(session, resolved.service)
+        try:
+            headers = await resolve_credential_headers(
+                session, service=resolved.service, connection=connection
+            )
+        except CredentialError as exc:
+            raise CamError(
+                CamErrorCode.UPSTREAM_AUTH,
+                "Credential rejected. Owner needs to reconnect.",
+                service=f"global/{resolved.service.slug}",
+            ) from exc
+        validate_args(resolved.tool.input_schema, call_args)
 
     service = resolved.service
     ref = f"global/{service.slug}"
@@ -177,11 +194,13 @@ async def _invoke(
         connection_id=str(connection.id),
         url=service.url,
         transport=transport,
-        headers={},
+        headers=headers,
     )
-    upstream = await deps.pool.session(target)
     try:
-        outcome = await upstream.call_tool(resolved.tool.upstream_name, call_args)
+        upstream = await deps.pool.session(target)
+        outcome = await upstream.call_tool(
+            resolved.tool.upstream_name, call_args, timeout_s=service.timeout_ms / 1000
+        )
     except UpstreamError as exc:
         raise map_upstream_error(exc, service_ref=ref, service_name=service.name) from exc
     if outcome.is_error:
@@ -193,7 +212,10 @@ async def _invoke(
             upstream_text or f"{service.name} returned an error.",
             service=ref,
         )
-    return CamResult(content=outcome.content, structured=outcome.structured, is_error=False)
+    content, truncated = truncate_blocks(outcome.content, service.response_cap_tokens)
+    return CamResult(
+        content=content, structured=outcome.structured, is_error=False, truncated=truncated
+    )
 
 
 async def _dispatch(
@@ -218,6 +240,13 @@ async def _dispatch(
     if action == "describe":
         return await _describe(deps, identity, tool_id)
     if action == "invoke":
+        if not deps.rate_limiter.allow(identity.token.id):
+            limit = deps.rate_limiter.limit
+            raise CamError(
+                CamErrorCode.CAM_RATE_LIMITED,
+                f"Rate limit exceeded: at most {limit} invoke calls per minute "
+                "per token. Retry later.",
+            )
         return await _invoke(deps, identity, tool_id, args)
     raise skills_unavailable()
 

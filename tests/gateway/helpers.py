@@ -21,6 +21,10 @@ class GatewayData:
     service_b_slug: str
     echo_tool_id: str
     disabled_tool_id: str
+    timeout_ref: str
+    auth_ok_ref: str
+    auth_bad_ref: str
+    dead_ref: str
 
 
 @dataclass(slots=True)

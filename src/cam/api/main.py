@@ -14,6 +14,7 @@ from cam.db.session import create_db_engine, create_session_factory
 from cam.gateway.auth import BearerAuthMiddleware
 from cam.gateway.server import create_mcp_server, load_server_instructions
 from cam.invoke.pipeline import GatewayDeps
+from cam.invoke.rate_limit import RateLimiter
 from cam.upstream.pool import SessionPool
 
 
@@ -47,7 +48,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     engine = create_db_engine(cfg.database_url)
     session_factory = create_session_factory(engine)
     pool = SessionPool(settings=cfg)
-    deps = GatewayDeps(session_factory=session_factory, pool=pool, settings=cfg)
+    deps = GatewayDeps(
+        session_factory=session_factory,
+        pool=pool,
+        settings=cfg,
+        rate_limiter=RateLimiter(cfg.rate_limit_per_min),
+    )
     gateway = GatewayMount()
 
     @asynccontextmanager

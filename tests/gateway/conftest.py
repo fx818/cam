@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any
 
 import httpx
 import pytest
+from fastapi import FastAPI
 
 from cam.api.main import create_app
 from cam.config import Settings
@@ -30,12 +32,14 @@ async def _import_tools(
     service: Any,
     url: str,
     transport: McpTransport,
+    headers: dict[str, str] | None = None,
 ) -> list[Tool]:
     target = ConnectionTarget(
         service_id=str(service.id),
         connection_id=f"import-{uuid.uuid4().hex[:8]}",
         url=url,
         transport=transport,
+        headers=headers or {},
     )
     upstream = UpstreamSession(target, call_timeout_s=15.0)
     await upstream.start()
@@ -74,7 +78,9 @@ def _make_user(org_id: uuid.UUID, suffix: str, label: str) -> User:
 
 
 @pytest.fixture(scope="session")
-async def gateway_data(mock_mcp: MockMCPHandle) -> AsyncIterator[GatewayData]:
+async def gateway_data(
+    mock_mcp: MockMCPHandle, mock_mcp_authed: MockMCPHandle
+) -> AsyncIterator[GatewayData]:
     engine = create_db_engine(Settings().database_url)
     factory = create_session_factory(engine)
     suffix = uuid.uuid4().hex[:12]
@@ -120,6 +126,48 @@ async def gateway_data(mock_mcp: MockMCPHandle) -> AsyncIterator[GatewayData]:
                 ServiceVisibility(org_id=org.id, service_id=service_b.id, user_id=user_b.id)
             )
 
+            service_timeout, _ = await register_global_mcp(
+                session,
+                slug=f"gwtimeout{suffix}",
+                name="Gateway Timeout Mock",
+                url=mock_mcp.streamable_url,
+                transport="streamable-http",
+                auth_type="none",
+                description="Service with a very small per-service timeout",
+            )
+            service_timeout.timeout_ms = 500
+
+            service_auth_ok, _ = await register_global_mcp(
+                session,
+                slug=f"gwauthok{suffix}",
+                name="Gateway Auth OK",
+                url=mock_mcp_authed.streamable_url,
+                transport="streamable-http",
+                auth_type="bearer",
+                credential="test-secret",
+                description="Bearer-authenticated mock with the right secret",
+            )
+            service_auth_bad, _ = await register_global_mcp(
+                session,
+                slug=f"gwauthbad{suffix}",
+                name="Gateway Auth Bad",
+                url=mock_mcp_authed.streamable_url,
+                transport="streamable-http",
+                auth_type="bearer",
+                credential="wrong-secret",
+                description="Bearer-authenticated mock with a stale secret",
+            )
+            service_dead, _ = await register_global_mcp(
+                session,
+                slug=f"gwdead{suffix}",
+                name="Gateway Dead Mock",
+                url="http://127.0.0.1:9/mcp",
+                transport="streamable-http",
+                auth_type="none",
+                description="Nothing listens on this address",
+            )
+
+            auth_headers = {"Authorization": "Bearer test-secret"}
             tools_a = await _import_tools(
                 session,
                 org_id=org.id,
@@ -134,6 +182,45 @@ async def gateway_data(mock_mcp: MockMCPHandle) -> AsyncIterator[GatewayData]:
                 url=mock_mcp.sse_url,
                 transport="sse",
             )
+            await _import_tools(
+                session,
+                org_id=org.id,
+                service=service_timeout,
+                url=mock_mcp.streamable_url,
+                transport="streamable-http",
+            )
+            await _import_tools(
+                session,
+                org_id=org.id,
+                service=service_auth_ok,
+                url=mock_mcp_authed.streamable_url,
+                transport="streamable-http",
+                headers=auth_headers,
+            )
+            await _import_tools(
+                session,
+                org_id=org.id,
+                service=service_auth_bad,
+                url=mock_mcp_authed.streamable_url,
+                transport="streamable-http",
+                headers=auth_headers,
+            )
+            session.add(
+                Tool(
+                    org_id=org.id,
+                    service_id=service_dead.id,
+                    name="echo",
+                    upstream_name="echo",
+                    description="Echo text back unchanged",
+                    input_schema={
+                        "type": "object",
+                        "properties": {"text": {"type": "string"}},
+                        "required": ["text"],
+                    },
+                    enabled=True,
+                    status="active",
+                )
+            )
             disabled = next(tool for tool in tools_a if tool.name == "add_dynamic_tool")
             disabled.enabled = False
             await session.commit()
@@ -147,14 +234,18 @@ async def gateway_data(mock_mcp: MockMCPHandle) -> AsyncIterator[GatewayData]:
                 service_a_slug=service_a.slug,
                 service_b_slug=service_b.slug,
                 echo_tool_id=f"global/{service_a.slug}/echo",
-                disabled_tool_id=f"global/{service_a.slug}/{disabled.name}",
+                disabled_tool_id=f"global/{service_a.slug}/add_dynamic_tool",
+                timeout_ref=f"global/{service_timeout.slug}",
+                auth_ok_ref=f"global/{service_auth_ok.slug}",
+                auth_bad_ref=f"global/{service_auth_bad.slug}",
+                dead_ref=f"global/{service_dead.slug}",
             )
     finally:
         await engine.dispose()
 
 
-@pytest.fixture
-async def gateway(gateway_data: GatewayData) -> AsyncIterator[GatewayEnv]:
+@asynccontextmanager
+async def _app_env(app: FastAPI, data: GatewayData) -> AsyncGenerator[GatewayEnv]:
     """Run the app lifespan in a dedicated task.
 
     pytest-asyncio finalizes async-generator fixtures from a different task
@@ -163,7 +254,6 @@ async def gateway(gateway_data: GatewayData) -> AsyncIterator[GatewayEnv]:
     lifespan here keeps enter/exit inside one task; teardown only signals stop
     and awaits a clean shutdown.
     """
-    app = create_app()
     stop = asyncio.Event()
     started = asyncio.Event()
     failure: list[BaseException] = []
@@ -186,9 +276,22 @@ async def gateway(gateway_data: GatewayData) -> AsyncIterator[GatewayEnv]:
     async with httpx.AsyncClient(
         transport=transport, base_url="http://gateway.test", timeout=30.0
     ) as client:
-        yield GatewayEnv(app=app, client=client, data=gateway_data)
+        yield GatewayEnv(app=app, client=client, data=data)
     stop.set()
     await task
+
+
+@pytest.fixture
+async def gateway(gateway_data: GatewayData) -> AsyncIterator[GatewayEnv]:
+    async with _app_env(create_app(), gateway_data) as env:
+        yield env
+
+
+@pytest.fixture
+async def gateway_limited(gateway_data: GatewayData) -> AsyncIterator[GatewayEnv]:
+    app = create_app(Settings(rate_limit_per_min=2))
+    async with _app_env(app, gateway_data) as env:
+        yield env
 
 
 @pytest.fixture
