@@ -12,13 +12,13 @@ from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cam.access.resolution import GLOBAL_OWNER, service_ref
 from cam.api.deps import SessionIdentity, require_admin
 from cam.api.errors import ApiProblem
-from cam.db.models import Service
+from cam.db.models import Service, Tool
 from cam.registry.services import (
     ServiceAlreadyExists,
     ServiceError,
@@ -53,6 +53,49 @@ class CreateTemplateBody(BaseModel):
     api_key_in: Literal["header", "query"] | None = None
     username: str | None = None
     tools: list[str] | None = None
+    test: bool = True
+
+
+_CREDENTIAL_HINT = "Paste the FULL header value exactly, including prefixes such as 'Bearer '"
+
+
+def _test_hint(error: str | None, auth_type: str) -> str | None:
+    if error is None or "UPSTREAM_AUTH" not in error:
+        return None
+    if auth_type in ("static-header", "api-key"):
+        return _CREDENTIAL_HINT
+    return None
+
+
+async def _run_admin_test(session_factory: Any, service_id: Any, auth_type: str) -> dict[str, Any]:
+    from cam.registry.resync import resync_service_id
+
+    outcome = await resync_service_id(session_factory, service_id, skip_if_running=True)
+    tool_count = 0
+    status_counts: dict[str, int] = {}
+    async with session_factory() as db:
+        result = await db.execute(
+            select(Tool.status, func.count())
+            .where(Tool.service_id == service_id, Tool.status != "removed_upstream")
+            .group_by(Tool.status)
+        )
+        for status, count in result.all():
+            status_counts[str(status)] = int(count)
+            tool_count += int(count)
+    error = outcome.error
+    if outcome.status == "skipped":
+        error = "another re-sync is already running for this service"
+    return {
+        "ok": outcome.status == "done",
+        "tool_count": tool_count,
+        "pending_review_count": status_counts.get("pending_review", 0),
+        "imported": len(outcome.added),
+        "updated": len(outcome.updated),
+        "removed": len(outcome.removed),
+        "status": outcome.status,
+        "error": error,
+        "hint": _test_hint(error, auth_type),
+    }
 
 
 @router.post("/services")
@@ -89,7 +132,28 @@ async def create_org_service(
             raise ApiProblem("VALIDATION_ERROR", str(exc), 422) from None
         from cam.api.routes.services_create import service_public
 
-        return {"service": service_public(service, None)}
+        payload: dict[str, Any] = {"service": service_public(service, None)}
+        if body.test:
+            payload["test"] = await _run_admin_test(session_factory, service.id, body.auth_type)
+        return payload
+
+
+@router.post("/services/{owner}/{slug}/resync")
+async def resync_admin_service(
+    request: Request, admin: AdminDep, owner: str, slug: str
+) -> dict[str, Any]:
+    _resolve_slug(owner)
+    session_factory = request.app.state.session_factory
+    async with session_factory() as db:
+        try:
+            service = await get_admin_service(db, slug=slug)
+        except ServiceError as exc:
+            raise _visibility_problem(exc) from None
+        service_id = service.id
+        auth_type = service.auth_type
+        ref = service_ref(service, None)
+    result = await _run_admin_test(session_factory, service_id, auth_type)
+    return {"service": ref, "test": result}
 
 
 @router.get("/services")
@@ -104,9 +168,30 @@ async def list_admin_services(request: Request, admin: AdminDep) -> dict[str, An
             )
         )
         rows = result.scalars().all()
+        counts_by_service: dict[Any, dict[str, int]] = {}
+        if rows:
+            counts = await db.execute(
+                select(Tool.service_id, Tool.status, func.count())
+                .where(
+                    Tool.org_id == admin.org_id,
+                    Tool.service_id.in_([service.id for service in rows]),
+                    Tool.status != "removed_upstream",
+                )
+                .group_by(Tool.service_id, Tool.status)
+            )
+            for service_id, status, count in counts.all():
+                counts_by_service.setdefault(service_id, {})[str(status)] = int(count)
         from cam.api.routes.services_create import service_public
 
-        return {"services": [service_public(service, None) for service in rows]}
+        return {
+            "services": [
+                {
+                    **service_public(service, None),
+                    "tool_counts": counts_by_service.get(service.id, {}),
+                }
+                for service in rows
+            ]
+        }
 
 
 class VisibilityBody(BaseModel):
