@@ -7,7 +7,7 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from cam.config import Settings
-from cam.db.base import Base
+from cam.db import models
 
 config = context.config
 
@@ -16,7 +16,7 @@ if config.config_file_name is not None:
 
 config.set_main_option("sqlalchemy.url", Settings().database_url)
 
-target_metadata = Base.metadata
+target_metadata = models.Base.metadata
 
 
 def run_migrations_offline() -> None:
