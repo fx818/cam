@@ -116,13 +116,16 @@ def _service_summary_payload(summaries: list[ServiceSummary]) -> dict[str, Any]:
         "services": [
             {
                 "id": summary.id,
+                "service_id": summary.service_id,
                 "name": summary.name,
                 "description": summary.description,
                 "tier": summary.tier,
+                "kind": summary.kind,
                 "owner": summary.owner,
                 "shared_by": summary.shared_by,
                 "health": summary.health,
                 "tool_count": summary.tool_count,
+                "connected": summary.connected,
             }
             for summary in summaries
         ]
@@ -138,7 +141,7 @@ def _tool_description(tool: Tool) -> str:
 
 async def _list_services(deps: GatewayDeps, identity: AuthenticatedIdentity) -> dict[str, Any]:
     async with deps.session_factory() as session:
-        summaries = await list_services(session, identity)
+        summaries = await list_services(session, identity, include_templates=True)
     return _service_summary_payload(summaries)
 
 
@@ -192,7 +195,12 @@ async def _invoke(
 
     async with deps.session_factory() as session:
         resolved: ResolvedTool = await resolve_tool(session, identity, raw_id)
-        connection = await resolve_connection(session, resolved.service, ref=resolved.service_ref)
+        connection = await resolve_connection(
+            session,
+            resolved.service,
+            ref=resolved.service_ref,
+            user_id=identity.user.id,
+        )
         audit_ref = AuditRef(
             service_id=resolved.service.id,
             connection_id=connection.id,

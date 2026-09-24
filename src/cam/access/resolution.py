@@ -8,10 +8,11 @@ Phase 2.3). Callers without access always get `ServiceNotFound`.
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass
 from typing import Literal
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cam.audit.writer import AuditRef
@@ -30,9 +31,12 @@ class ServiceNotFound(Exception):
 class ServiceDisabled(Exception):
     """The service exists and the caller may reach it, but it is not active."""
 
-    def __init__(self, ref: str, *, audit_ref: AuditRef | None = None) -> None:
-        super().__init__(ref)
+    def __init__(
+        self, ref: str, *, audit_ref: AuditRef | None = None, message: str | None = None
+    ) -> None:
+        super().__init__(message or ref)
         self.audit_ref = audit_ref
+        self.message = message or ref
 
 
 class OwnerDeactivated(Exception):
@@ -45,14 +49,17 @@ class OwnerDeactivated(Exception):
 
 @dataclass(frozen=True, slots=True)
 class ServiceSummary:
+    service_id: str
     id: str
     name: str
     description: str
     tier: str
+    kind: str
     owner: str | None
     shared_by: str | None
     health: str
     tool_count: int
+    connected: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,7 +98,7 @@ def parse_tool_id(tool_id: str) -> tuple[str, str, str]:
 
 
 def service_ref(service: Service, owner_handle: str | None = None) -> str:
-    if service.tier == "global":
+    if service.tier in ("global", "template"):
         return f"{GLOBAL_OWNER}/{service.slug}"
     if not owner_handle:
         raise ValueError(f"owner handle required to build the ref for service {service.slug!r}")
@@ -169,7 +176,7 @@ async def _lookup_service(
         result = await session.execute(
             select(Service).where(
                 Service.org_id == identity.org_id,
-                Service.tier == GLOBAL_OWNER,
+                Service.tier.in_((GLOBAL_OWNER, "template")),
                 Service.slug == slug,
             )
         )
@@ -197,9 +204,36 @@ async def _lookup_service(
     return service, owner_user.handle
 
 
+async def _connection_status_for(
+    session: AsyncSession, identity: AuthenticatedIdentity, service: Service
+) -> bool:
+    if service.tier == "template":
+        result = await session.execute(
+            select(Connection.status).where(
+                Connection.org_id == identity.org_id,
+                Connection.service_id == service.id,
+                Connection.user_id == identity.user.id,
+            )
+        )
+        row = result.first()
+        return row is not None and row[0] == "connected"
+    result = await session.execute(
+        select(Connection.status).where(
+            Connection.org_id == identity.org_id,
+            Connection.service_id == service.id,
+            Connection.user_id.is_(None),
+        )
+    )
+    row = result.first()
+    if row is not None:
+        return row[0] == "connected"
+    return service.auth_type == "none"
+
+
 async def list_services(
-    session: AsyncSession, identity: AuthenticatedIdentity
+    session: AsyncSession, identity: AuthenticatedIdentity, *, include_templates: bool = False
 ) -> list[ServiceSummary]:
+    tiers = ("global", "personal", "template") if include_templates else ("global", "personal")
     stmt = (
         select(Service, User.handle, func.count(Tool.id))
         .outerjoin(User, User.id == Service.owner_user_id)
@@ -213,7 +247,7 @@ async def list_services(
         )
         .where(
             Service.org_id == identity.org_id,
-            or_(Service.tier == GLOBAL_OWNER, Service.tier == "personal"),
+            Service.tier.in_(tiers),
             Service.status == "active",
         )
         .group_by(Service.id, User.handle)
@@ -224,23 +258,28 @@ async def list_services(
     for service, owner_handle, tool_count in rows:
         if await has_access(session, identity, service):
             allowed.append((service, owner_handle, tool_count))
-    return [
-        ServiceSummary(
-            id=service_ref(service, owner_handle),
-            name=service.name,
-            description=service.description,
-            tier=service.tier,
-            owner=owner_handle if service.tier == "personal" else None,
-            shared_by=(
-                owner_handle
-                if service.tier == "personal" and service.owner_user_id != identity.user.id
-                else None
-            ),
-            health=service.health,
-            tool_count=tool_count,
+    summaries: list[ServiceSummary] = []
+    for service, owner_handle, tool_count in allowed:
+        summaries.append(
+            ServiceSummary(
+                service_id=str(service.id),
+                id=service_ref(service, owner_handle),
+                name=service.name,
+                description=service.description,
+                tier=service.tier,
+                kind=service.kind,
+                owner=owner_handle if service.tier == "personal" else None,
+                shared_by=(
+                    owner_handle
+                    if service.tier == "personal" and service.owner_user_id != identity.user.id
+                    else None
+                ),
+                health=service.health,
+                tool_count=tool_count,
+                connected=await _connection_status_for(session, identity, service),
+            )
         )
-        for service, owner_handle, tool_count in allowed
-    ]
+    return summaries
 
 
 async def resolve_service(
@@ -304,12 +343,46 @@ async def resolve_org_connection(session: AsyncSession, service: Service) -> Con
     return connection
 
 
-async def resolve_connection(session: AsyncSession, service: Service, *, ref: str) -> Connection:
-    if service.tier == "global":
+async def resolve_connection(
+    session: AsyncSession, service: Service, *, ref: str, user_id: uuid.UUID | None = None
+) -> Connection:
+    if service.tier in ("global", "template"):
         try:
             return await resolve_org_connection(session, service)
         except ServiceDisabled:
-            raise ServiceDisabled(ref, audit_ref=AuditRef(service_id=service.id)) from None
+            if service.tier != "template" or user_id is None:
+                raise ServiceDisabled(ref, audit_ref=AuditRef(service_id=service.id)) from None
+        result = await session.execute(
+            select(Connection).where(
+                Connection.org_id == service.org_id,
+                Connection.service_id == service.id,
+                Connection.user_id == user_id,
+            )
+        )
+        connection = result.scalar_one_or_none()
+        if connection is not None and connection.status == "connected":
+            return connection
+        shared = await session.execute(
+            select(Connection)
+            .join(Share, Share.connection_id == Connection.id)
+            .where(
+                Share.org_id == service.org_id,
+                Connection.service_id == service.id,
+                Share.grantee_user_id == user_id,
+                Share.revoked_at.is_(None),
+            )
+        )
+        shared_connection = shared.scalars().first()
+        if shared_connection is not None and shared_connection.status == "connected":
+            return shared_connection
+        raise ServiceDisabled(
+            ref,
+            audit_ref=AuditRef(service_id=service.id),
+            message=(
+                f"This template needs a connection. Connect your own {service.name} "
+                "credentials in the CAM dashboard."
+            ),
+        ) from None
     if service.tier == "personal":
         result = await session.execute(
             select(Connection).where(
