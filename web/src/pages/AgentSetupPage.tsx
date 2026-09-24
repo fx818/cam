@@ -111,6 +111,13 @@ export function AgentSetupPage() {
     null,
     2,
   )
+  const codexSnippet = `# ~/.codex/config.toml
+[mcp_servers.cam]
+url = "${mcpUrl}"
+enabled = true
+bearer_token_env_var = "CAM_TOKEN"  # export CAM_TOKEN=<your-token>
+# alternatively, a static header:
+# http_headers = { Authorization = "Bearer <your-token>" }`
 
   return (
     <div className="space-y-6 p-6">
@@ -218,6 +225,7 @@ export function AgentSetupPage() {
         <CardContent className="space-y-4">
           <CopyRow label="Claude Code" value={claudeSnippet} />
           <CopyRow label="Cursor / generic MCP (JSON)" value={jsonSnippet} />
+          <CopyRow label="Codex (config.toml)" value={codexSnippet} />
         </CardContent>
       </Card>
 
