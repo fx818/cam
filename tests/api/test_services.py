@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import uuid
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.helpers import UserEnv, login, mutate_json, user_client
 from cam.db.models import Connection, Service, Share, Tool, User
+from cam.registry.services import register_personal_mcp
+from cam.upstream import ConnectionTarget, UpstreamSession
+from fixtures.mock_mcp import MockMCPHandle
 
 
 async def test_services_list_groups(
@@ -265,20 +270,95 @@ async def test_stranger_cannot_patch_tool(
         assert response.status_code == 404
 
 
-async def test_resync_returns_not_implemented(
+async def test_resync_endpoint_adds_personal_tool(
     env_user: UserEnv,
     user_password: str,
+    db_session: AsyncSession,
+    mock_mcp: MockMCPHandle,
+    loopback_allowlist: object,
+) -> None:
+    owner = env_user.user
+    handle = owner.handle
+    service, _connection = await register_personal_mcp(
+        db_session,
+        owner=owner,
+        slug=f"syncreal-{uuid.uuid4().hex[:8]}",
+        name="Sync Real",
+        url=mock_mcp.streamable_url,
+        transport="streamable-http",
+        auth_type="none",
+    )
+    await db_session.commit()
+    await login(env_user.client, env_user.user.email, user_password)
+    seeded = Tool(
+        org_id=service.org_id,
+        service_id=service.id,
+        name="echo",
+        upstream_name="echo",
+        description="Seeded from the mock import",
+        input_schema={"type": "object", "properties": {"text": {"type": "string"}}},
+        enabled=True,
+        status="active",
+    )
+    db_session.add(seeded)
+    await db_session.commit()
+    dynamic_name = f"dynapi_{uuid.uuid4().hex[:8]}"
+    probe = UpstreamSession(
+        ConnectionTarget(
+            service_id="probe3",
+            connection_id=uuid.uuid4().hex,
+            url=mock_mcp.streamable_url,
+            transport="streamable-http",
+        ),
+        call_timeout_s=10.0,
+    )
+    await probe.start()
+    try:
+        outcome = await probe.call_tool("add_dynamic_tool", {"name": dynamic_name})
+        assert outcome.is_error is False
+    finally:
+        await probe.aclose()
+    response = await mutate_json(
+        env_user.client, "POST", f"/api/services/{handle}/{service.slug}/resync"
+    )
+    assert response.status_code == 200, response.json()
+    payload = response.json()
+    assert payload["resync"]["status"] == "done"
+    assert dynamic_name in payload["resync"]["added"]
+    listed = await env_user.client.get(f"/api/services/{handle}/{service.slug}/tools")
+    assert listed.status_code == 200
+    names = [tool["name"] for tool in listed.json()["tools"]]
+    assert dynamic_name in names
+
+
+async def test_resync_endpoint_forbidden_for_stranger(
+    env_user: UserEnv,
+    user_password: str,
+    second_user: User,
+    second_password: str,
     personal_service: tuple[Service, Connection],
 ) -> None:
     service, _connection = personal_service
     await login(env_user.client, env_user.user.email, user_password)
+    async with user_client(env_user.app) as other:
+        await login(other, second_user.email, second_password)
+        response = await mutate_json(
+            other, "POST", f"/api/services/{env_user.user.handle}/{service.slug}/resync"
+        )
+        assert response.status_code == 404
+        assert response.json()["error"]["code"] == "NOT_FOUND"
+
+
+async def test_resync_endpoint_reports_failure(
+    env_user: UserEnv, user_password: str, personal_service: tuple[Service, Connection]
+) -> None:
+    service, _connection = personal_service
+    await login(env_user.client, env_user.user.email, user_password)
     response = await mutate_json(
-        env_user.client,
-        "POST",
-        f"/api/services/{env_user.user.handle}/{service.slug}/resync",
+        env_user.client, "POST", f"/api/services/{env_user.user.handle}/{service.slug}/resync"
     )
-    assert response.status_code == 501
-    assert response.json()["error"]["code"] == "NOT_IMPLEMENTED"
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "RESYNC_FAILED"
 
 
 async def test_services_require_auth(env_user: UserEnv) -> None:

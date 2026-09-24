@@ -171,11 +171,21 @@ async def resync_service(
     request: Request, identity: IdentityDep, owner: str, slug: str
 ) -> dict[str, object]:
     session_factory = request.app.state.session_factory
+    service_id: uuid.UUID | None = None
     async with session_factory() as db:
         try:
             context = await lookup_service_context(db, identity, owner, slug)
         except ServiceNotFound:
             raise ApiProblem("NOT_FOUND", "Service not found.", 404) from None
+        if context.service.status == "deleted":
+            raise ApiProblem("NOT_FOUND", "Service not found.", 404) from None
         if not context.can_manage:
             raise ApiProblem("FORBIDDEN", "You cannot re-sync this service.", 403)
-    raise ApiProblem("NOT_IMPLEMENTED", "Re-sync arrives with Phase 5.", 501)
+        service_id = context.service.id
+    assert service_id is not None
+    from cam.registry.resync import resync_service_id
+
+    outcome = await resync_service_id(session_factory, service_id, skip_if_running=True)
+    if outcome.status == "failed":
+        raise ApiProblem("RESYNC_FAILED", outcome.error or "Re-sync failed.", 400)
+    return {"service": context.ref, "resync": outcome.payload()}

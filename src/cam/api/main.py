@@ -43,7 +43,7 @@ from cam.registry.resync import ResyncCoordinator
 from cam.upstream.pool import SessionPool
 
 
-def _list_changed_handler_factory(
+def list_changed_handler_factory(
     coordinator: ResyncCoordinator,
 ) -> Callable[[str, str], Any]:
     def factory(service_id: str, connection_id: str) -> Any:
@@ -128,7 +128,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         settings=cfg,
         rate_limiter=RateLimiter(cfg.rate_limit_per_min),
         audit=audit,
-        message_handler_factory=_list_changed_handler_factory(coordinator),
+        message_handler_factory=list_changed_handler_factory(coordinator),
     )
     runner = JobRunner(
         cfg,
