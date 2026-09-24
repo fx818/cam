@@ -173,6 +173,43 @@ Merge: Alembic heads merged (multiple-heads resolution `d5ffa516aec4`); pipeline
 
 Phase 5+6 coordinator resolutions: no DEFAULT partition on audit_logs (revisit if long downtime expected); removed-tool reactivation follows tier rule; OAuth rotation via reconnect flow; `RESYNC_FAILED` API error for unreachable upstream; skill envelope `service=None` (consistent with skill-action precedent); UI diffs against current only (API supports `to=`).
 
+## 2026-09-24 — Phase 7.1: security self-audit (prepared for owner, awaiting sign-off)
+
+- `docs/security-review.md`: threat model, per-surface checklist with code pointers (credential envelope `CAMC1`/AES-256-GCM + per-org data keys, argon2id in thread pool, token SHA-256 hashing, 5/15-min lockout, 12 h session + CSRF, access-boundary coverage, SSRF URL policy incl. per-request DNS validation + pinning + 3-hop redirects, audit content incl. full args and no-bodies, rate limit 120/min/token, DNS-rebinding decision, no DEFAULT partition trade-off, key backup warning), verified values table, and 10 sign-off questions for IndiaMART security.
+- Automated backstop `tests/test_secret_hygiene.py`: AST grep for credential-like terms in every `logging` call in src/, no credential-shaped literals (`cam_<43 chars>`, AKIA, private-key PEM), and drift pins — rate limit 120, timeout 60 s, cap 50,000, retention 30 days, lockout 5/15, session 12 h, key env format `v1:<base64>` (32 bytes).
+- `.env` commit blocked by pre-commit hook and `.gitignore`-assert tests (existing, cited in the doc).
+
+Numbers/sign-offs pending owner.
+
+## 2026-09-24 — Phase 7.2: load test
+
+- `scripts/load_test.py` — real `/mcp` through the in-process ASGI app, real Postgres, mock MCP: N agents, each opens a session, then starts a slow (1.5 s) invoke and — while it is in flight — an echo invoke to a different service; logs p50/p95/max, error rate, and audit rows written (control pass measures echo-only latency as the baseline). `--agents 50 100 200` for the full sweep; `--pytest` runs 8 agents with the assertions, and `tests/load/test_load_script.py` runs that in the suite (env restored afterwards).
+- Full-run results (all errors 0, audit rows exactly as expected, no queue drops):
+
+| agents | wall | slow p50/p95/max (sleep 1.5 s) | echo-in-flight p50/p95 | control echo | blocked echo |
+| --- | --- | --- | --- | --- | --- |
+| 50 | 5.7 s | 5.19/5.35/5.68 s | 3.27/4.52 s | — | 50 |
+| 100 | 11.5 s | 9.81/10.74/11.44 s | 8.36/10.01 s | 3.4/4.6 s | 100 |
+| 200 | 23.9 s | 21.14/22.42/23.88 s | 18.65/21.32 s | — | 200 |
+| 8 (pytest mode) | 2.2 s | 2.11/2.16/2.16 s | 0.49/0.50 s | 0.63 s | 0 |
+
+- Finding: **no event-loop blocking** — echo-while-slow completes while slow calls run (small-N p95 under control baseline; upstream-level probe: 5 concurrent slow calls through one pooled session = 1.16 s for 1.0 s sleeps). Absolute latency at high concurrency is dominated by request-level DB round trips against the default SQLAlchemy pool (5+10 overflow) and per-request session opens, not by any sync code: ~3.4 s echo at 100 concurrent vs ~0.55 s single. Phase 8 should size the DB pool to expected concurrency.
+- Suite after Phase 7.2: 524 passed.
+
+## 2026-09-24 — Phase 7.3: harness checks
+
+- Config syntax verified against each harness's current docs: Claude Code `claude mcp add --transport http cam <BASE>/mcp --header "Authorization: Bearer <token>"` (matches dashboard); Cursor `~/.cursor/mcp.json` with `url` + `headers` (matches); Codex `~/.codex/config.toml` `[mcp_servers.cam]` with `url` + `bearer_token_env_var` — **Codex snippet added to the Agent setup page** (mini change only; typed client/schema unchanged).
+- `docs/harness-checks.md` records the evidence: Claude Code CLI tool timeout ≈ 28 h (`MCP_TOOL_TIMEOUT`, plus 5-min remote idle abort since v2.1.187) but the Claude Code **desktop app** hard-cancels at ~60 s (open bug anthropics/claude-code#63379); Codex has per-server `tool_timeout_sec`; Cursor has no configurable tools/call timeout — ACP/cli path is the TypeScript-SDK 60 s hard limit, IDE path much longer. So yes, at least two harnesses can cut a 60 s CAM call; documented guidance = keep interactive tools under ~50 s, use return-job-then-poll for longer work. Architecture "Open items" checkbox left for the owner.
+- Live harness runs remain manual for the owner (listed in the pilot plan).
+
+## 2026-09-24 — Phase 7.4: onboarding and register-a-service guides
+
+- `docs/onboarding.md` and `docs/register-a-service.md`, written against the actual routes/pages (verified: wizard steps Type→Details→Auth→Test→Tools→Limits→Save; service detail tabs Tools/Connection/Sharing/Activity/Settings; `/api` routes per the Dashboard API section). No automation.
+
+## 2026-09-24 — Phase 7.5: pilot plan (prepared for owner)
+
+- `docs/pilot-plan.md`: success-criteria checklist, two-team enrollment via the admin screens only, weekly audit-log mining table (agent mix, top services, error rates, NOT_FOUND, truncations, latency, description-tuning candidates), a six-step tool-description tuning workflow (mine → diagnose → rewrite → description_override → verify → rollbackable), and a feedback template. Execution needs real teams; security sign-off (7.1) precedes it.
+
 ## Open questions
 
 Resolved by coordinator (2026-09-24, Phase 2):
