@@ -210,6 +210,19 @@ Numbers/sign-offs pending owner.
 
 - `docs/pilot-plan.md`: success-criteria checklist, two-team enrollment via the admin screens only, weekly audit-log mining table (agent mix, top services, error rates, NOT_FOUND, truncations, latency, description-tuning candidates), a six-step tool-description tuning workflow (mine → diagnose → rewrite → description_override → verify → rollbackable), and a feedback template. Execution needs real teams; security sign-off (7.1) precedes it.
 
+## 2026-09-25 — fix: admin register runs live test and sync (post-phase usability fix)
+
+- After three field incidents with Admin → Global services (credential saved wrong with no feedback, "no tools, no way to test", register vs discover-tools confusion), the admin service pages now self-verify:
+  - `POST /api/admin/services` gains optional `test: bool = True`: after persisting, the route runs the real `registry.resync.resync_service_id` (same machinery as `POST /api/services/test` + Refresh) so the tier diff/import rules run once. Response carries `test: {ok, tool_count, pending_review_count, imported, updated, removed, status, error?, hint?}`. A failed test never rolls back the registration, and credentials are never echoed.
+  - New row-level `POST /api/admin/services/{owner}/{slug}/resync` (admin variant of the service resync route; same `skip_if_running=True` default) returns the same `test`-shaped payload. Unauthenticated → 401, non-admin → 403, unknown slug → 404 via ApiProblem.
+  - Auth failures for static-header/api-key return `hint: "Paste the FULL header value exactly, including prefixes such as 'Bearer '"` when the upstream answer is `UPSTREAM_AUTH`.
+  - `GET /api/admin/services` now includes per-service `tool_counts` by status (excludes `removed_upstream`).
+  - Web: register form shows "Connected — N tools imported (M pending review — approve in Review queue)" or the error + hint; credential fields carry full-value helper text (static-header/api-key) and the derived `Authorization` explanation (bearer/basic); each admin row has a Test/Sync button with an inline result and a "N pending review" badge linking to the Review queue. Enable/disable and visibility features unchanged.
+- Tests: `tests/api/test_admin_services_test_sync.py` (8) — import per tier rule (globals land `pending_review`), `test:false` skips, wrong credential → `ok:false` + hint + service kept, list includes `tool_counts`, resync happy path, 404, unauthenticated 401.
+- Checks: ruff + ruff format + pyright + pytest **545 passed**; web `npm run generate:api`, `tsc --noEmit`, `npm test` (14), `npm run build` all green.
+- Manual check for owner: register a global MCP with a deliberately broken credential in Admin → Global services → row must show the failure with the "Bearer " hint and keep the service; fix the credential via service detail, hit Test/Sync, then approve the pending tools in the review queue.
+- Open question (non-blocking): template-tier services store no org credential, so the live test on the admin row reports "no connected credential is stored for this service" until a user connects. Registration-side live testing for templates may need a per-test ephemeral handshake; left as-is (matches "each user connects their own account" design).
+
 ## Open questions
 
 Resolved by coordinator (2026-09-24, Phase 2):
