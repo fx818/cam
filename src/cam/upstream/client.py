@@ -24,7 +24,12 @@ from mcp.client import Client, Transport
 from mcp.client.sse import sse_client
 from mcp.client.streamable_http import streamable_http_client
 
-from cam.upstream.errors import UpstreamError, UpstreamUnavailableError, map_exception
+from cam.upstream.errors import (
+    UpstreamError,
+    UpstreamTimeoutError,
+    UpstreamUnavailableError,
+    map_exception,
+)
 from cam.upstream.normalize import normalize_call_result
 from cam.upstream.pinning import pinned_transport_httpx2
 from cam.upstream.types import ConnectionTarget, MessageHandler, ToolCallOutcome, UpstreamTool
@@ -97,6 +102,7 @@ class UpstreamSession:
         self._shutdown: asyncio.Event | None = None
         self._start_error: BaseException | None = None
         self._pinned: PinnedDestination | None = None
+        self._stream_channel = False
 
     @property
     def closed(self) -> bool:
@@ -117,6 +123,16 @@ class UpstreamSession:
     @property
     def server_info(self) -> mcp_types.Implementation | None:
         return self._server_info
+
+    @property
+    def stream_channel(self) -> bool:
+        """Whether the session holds the GET SSE notification channel.
+
+        False means establishment fell back to auto mode (no GET stream), so
+        the upstream cannot push `notifications/tools/list_changed` on this
+        session; scheduled resync covers the drift.
+        """
+        return self._stream_channel
 
     def touch(self) -> None:
         self._last_used = time.monotonic()
@@ -139,10 +155,39 @@ class UpstreamSession:
         self._statuses.clear()
         self._closed = False
         self._start_error = None
+        self._stream_channel = False
+        try:
+            await self._establish(connect_timeout, stream_channel=True)
+        except UpstreamTimeoutError as first_error:
+            # ONE establish reconnect (spec: "may reconnect once"). Some upstreams
+            # answer the POST initialize quickly but their GET SSE stream never
+            # produces bytes (a proxy holds it open), so the legacy establish
+            # times out even though tools/call would work. Tear the half-open
+            # session down and re-establish once in auto mode: no GET channel,
+            # therefore no list_changed notifications on this session (the
+            # scheduled resync covers that). Never runs again after this:
+            # under a TimeoutError from the first attempt only, and never after
+            # tools/call — the pool still creates a single session per key
+            # because this fallback lives inside the same start() call.
+            logger.warning(
+                "legacy establish timed out for %s (%s); retrying once in auto "
+                "mode without the GET SSE channel",
+                self._target.service_id,
+                first_error.message or "no detail",
+            )
+            await self._establish(connect_timeout, stream_channel=False)
+        self.touch()
+
+    async def _establish(self, connect_timeout: float, *, stream_channel: bool) -> None:
+        """Run one owner task until startup finishes (or raise its mapped error)."""
+        self._client = None
+        self._closed = False
+        self._statuses.clear()
+        self._start_error = None
         self._ready = asyncio.Event()
         self._shutdown = asyncio.Event()
         self._owner = asyncio.create_task(
-            self._run(connect_timeout),
+            self._run(connect_timeout, stream_channel),
             name=f"cam-upstream:{self._target.service_id}",
         )
         await self._ready.wait()
@@ -151,7 +196,6 @@ class UpstreamSession:
             self._start_error = None
             await self._reap_owner()
             raise error
-        self.touch()
 
     async def list_tools(self, *, timeout_s: float | None = None) -> list[UpstreamTool]:
         client = self._require_client()
@@ -214,7 +258,7 @@ class UpstreamSession:
             shutdown.set()
         await self._reap_owner()
 
-    async def _run(self, connect_timeout: float) -> None:
+    async def _run(self, connect_timeout: float, stream_channel: bool) -> None:
         ready = self._ready
         shutdown = self._shutdown
         if ready is None or shutdown is None:  # pragma: no cover - set in start()
@@ -229,15 +273,26 @@ class UpstreamSession:
                 transport,
                 message_handler=handler,  # type: ignore[arg-type]
                 read_timeout_seconds=connect_timeout,
-                # "legacy" keeps the standard initialize + GET SSE channel, which
-                # is what servers use to push notifications/tools/list_changed.
-                # mode="auto" negotiates via server/discover without that channel.
-                mode="legacy",
+                # stream_channel=True → "legacy": the standard initialize
+                # handshake plus the GET SSE channel that servers use to push
+                # notifications/tools/list_changed. stream_channel=False →
+                # "auto": server/discover negotiation with no GET channel,
+                # used only as the one-time establish fallback when the GET
+                # stream hangs.
+                mode="legacy" if stream_channel else "auto",
             )
             async with asyncio.timeout(connect_timeout):
                 await stack.enter_async_context(client)
             self._client = client
             self._server_info = client.server_info
+            self._stream_channel = stream_channel
+            if not stream_channel:
+                logger.warning(
+                    "upstream %s established without stream channel; "
+                    "notifications/tools/list_changed will not arrive on "
+                    "this session",
+                    self._target.service_id,
+                )
             ready.set()
             await shutdown.wait()
         except BaseException as exc:

@@ -147,6 +147,91 @@ async def test_sse_transport_works(mock_mcp: MockMCPHandle) -> None:
         await session.aclose()
 
 
+async def test_hanging_get_stream_falls_back_to_auto_and_lists_tools(
+    mock_mcp_hang_get: MockMCPHandle,
+) -> None:
+    """A hung GET SSE stream must not kill the session: one auto fallback.
+
+    Field evidence (Elastic MCP): POST initialize answers in ~0.14s but the
+    GET channel produces zero bytes forever, so the legacy establish timed
+    out while tools/call worked fine.
+    """
+    target = streamable_target(mock_mcp_hang_get)
+    session = UpstreamSession(target, call_timeout_s=10.0)
+    loop = asyncio.get_running_loop()
+    t0 = loop.time()
+    await session.start(timeout_s=0.7)
+    elapsed = loop.time() - t0
+    try:
+        # The legacy attempt burned its full budget on the hung GET...
+        assert elapsed >= 0.7
+        # ...and the auto fallback completed shortly after.
+        assert elapsed < 5.0
+        assert session.stream_channel is False
+        assert session.healthy
+        tools = await session.list_tools()
+        assert {"echo", "slow", "huge"} <= {t.name for t in tools}
+        # Post-establish traffic works without the GET channel.
+        outcome = await session.call_tool("echo", {"text": "auto-fallback"})
+        assert outcome.content == (TextBlock(text="auto-fallback"),)
+    finally:
+        await session.aclose()
+
+
+async def test_establish_fallback_tries_exactly_once(
+    mock_mcp_hang_get: MockMCPHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the fallback (auto) attempt also fails, establish fails indefinitely.
+
+    Simulates a server whose POST also fails: the auto attempt raises the
+    mapped timeout too, and start() must surface the error after exactly two
+    attempts (legacy + one fallback) — no retry storm.
+    """
+    from contextlib import AsyncExitStack
+
+    from mcp.client import Transport
+
+    attempts: list[str] = []
+    original_build = UpstreamSession._build_transport  # pyright: ignore[reportPrivateUsage]
+
+    def fake_build(self: UpstreamSession, stack: AsyncExitStack, statuses: list[int]) -> Transport:
+        attempts.append("attempt")
+        if len(attempts) == 1:
+            return original_build(self, stack, statuses)
+        # Every POST on the fallback attempt fails (TimeoutError → TIMEOUT).
+        raise TimeoutError()
+
+    monkeypatch.setattr(UpstreamSession, "_build_transport", fake_build)  # pyright: ignore[reportPrivateUsage]
+    target = streamable_target(mock_mcp_hang_get)
+    session = UpstreamSession(target, call_timeout_s=10.0)
+    with pytest.raises(UpstreamTimeoutError):
+        await session.start(timeout_s=0.4)
+    assert attempts == ["attempt", "attempt"]
+    assert session.closed
+
+
+async def test_normal_establish_keeps_legacy_stream_channel(
+    mock_mcp: MockMCPHandle,
+) -> None:
+    """Healthy upstreams keep the legacy GET channel (1.4 behaviour)."""
+    notifications: list[object] = []
+
+    async def handler(message: object) -> None:
+        notifications.append(message)
+
+    target = streamable_target(mock_mcp, message_handler=handler)
+    session = await open_session(target)
+    try:
+        assert session.stream_channel is True
+        tool_name = f"stream_{uuid.uuid4().hex[:8]}"
+        await session.call_tool("add_dynamic_tool", {"name": tool_name})
+        await asyncio.sleep(0.3)
+        # The message_handler still receives server-pushed notifications.
+        assert any(type(n).__name__ == "ToolListChangedNotification" for n in notifications)
+    finally:
+        await session.aclose()
+
+
 async def test_auth_missing_token_maps_to_upstream_auth(mock_mcp_authed: MockMCPHandle) -> None:
     with pytest.raises(UpstreamAuthError):
         await open_session(streamable_target(mock_mcp_authed))

@@ -94,6 +94,13 @@ async def mock_mcp_authed() -> AsyncIterator[MockMCPHandle]:
 
 
 @pytest.fixture(scope="session")
+async def mock_mcp_hang_get() -> AsyncIterator[MockMCPHandle]:
+    """Shared mock whose GET SSE stream is accepted but never answered."""
+    async with start_mock_mcp(hang_get_stream=True) as handle:
+        yield handle
+
+
+@pytest.fixture(scope="session")
 async def mock_rest() -> AsyncIterator[MockRestHandle]:
     async with start_mock_rest() as handle:
         yield handle
