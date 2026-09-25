@@ -253,6 +253,20 @@ Numbers/sign-offs pending owner.
 - Checks: `npx tsc --noEmit`, `npm test` (28, was 19), `npm run build` all green. No backend changes; `npm run generate:api` not needed (no API shape change).
 - **Manual check for owner:** log in, My services → Templates → GKE template → Connect → dialog asks for the template's credential type (e.g. bearer token without prefix, or header value with prefix); enter your credential → Connect; card badge shows "connected". For the OAuth template: Connect → Authorize → browser navigates to the provider and back; connection appears after redirect.
 
+## 2026-09-25 — fix/connect: template tools import on the first usable connection
+
+- Field bug: a template (`global/gke-mcp`, bearer MCP) registered with `test:false` sat at "0 tools" forever — registration-time resync correctly reported "no connected credential" (templates store no org credential), but the owner's later connect stored the per-user credential without triggering any import. Nothing synced until something else (scheduled job, manual Sync) ran.
+- `routes/connect.py` now enqueues a tool import whenever a connection becomes usable (fire-and-forget, never blocks the connect response) via `_enqueue_import`:
+  - secret upsert (`_upsert_secret_connection` — bearer/static-header/api-key/basic),
+  - OAuth callback after `complete_authorize` saves tokens (`GET /api/oauth/callback`),
+  - `none`-auth connect — only on transition (row created), not on re-POST (which is otherwise a no-op returning the existing connection).
+  - Secret paths enqueue whenever a connected row is (re)written (created, or needs_reconnect→connected on re-credential); the coordinator's debounce + per-service `ResyncCoordinator`/`resync_service_id` lock make repeated enqueues cheap. Implementation detail: the enqueue prefers `app.state.resync_coordinator` (the app-lifespan `ResyncCoordinator(session_factory)`); if unreachable it falls back to `resync_service_id(session_factory, service.id, skip_if_running=True)` in a tracked `asyncio.create_task`. Re-POSTing the same credential enqueues too — idempotent by the resync diff, cheap by the lock.
+- Admin hint: `AdminServiceShared.tsx` template rows with `'active' + 'pending_review' == 0` tool counts render "No tools imported yet — a user must connect first (or use Sync after a user connects)" under the Tools cell (payload untouched; `GET /api/admin/services` `tool_counts` already carries it). The existing pending-review badge links to the Review queue.
+- User copy: ServiceDetailPage Tools empty state adds "Awaiting import/approval — new template tools are approved by an admin in the Review queue." (generic for both kinds).
+- Tests: `tests/api/test_connect_template_import.py` (1) — e2e against the bearer-guarded mock MCP: admin registers template with `test:false` (list shows 0 tools) → user connects with credential → review-queue poll confirms `pending_review` import (coordinator debounce ~2 s) → admin bulk-approves → user `tools/list` shows all tools `active`+`enabled`, admin `tool_counts` clean. OAuth-callback enqueue is exercised by the existing OAuth tests via the same `_enqueue_import` helper; the none-path transition enqueue by existing none-connect tests.
+- Checks: ruff + format + pyright + pytest **553 passed** (was 552); web `tsc --noEmit`, `vitest` (28), `npm run build` all green; docker compose app image rebuilt and healthy.
+- **Manual check for owner (template first-import):** Admin → register template (keep Test unchecked or fail the test — "no connected credential") → user (My services → Templates → GKE → Connect) enters credential → Connect → badge "connected" → within a couple of seconds the template's Tools tab lists tools as "pending review" → Admin → Review queue → select All → Approve → user refreshes Tools tab — tools now active and invokable via `/mcp`.
+
 ## Open questions
 
 Resolved by coordinator (2026-09-24, Phase 2):

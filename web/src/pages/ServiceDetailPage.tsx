@@ -112,9 +112,15 @@ function ToolsTab({
     )
   if (!data || data.tools.length === 0)
     return (
-      <p className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
-        No tools discovered yet. Tools appear after a successful test or sync.
-      </p>
+      <div className="space-y-1">
+        <p className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
+          No tools discovered yet. Tools appear after a successful test or sync.
+        </p>
+        <p className="text-xs text-muted-foreground">
+          Awaiting import/approval — new template tools are approved by an admin in the Review
+          queue.
+        </p>
+      </div>
     )
 
   return (

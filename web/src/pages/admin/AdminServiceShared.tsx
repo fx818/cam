@@ -263,6 +263,15 @@ export function AdminServiceRows({
                     tools
                   </span>
                   {service.tool_counts && <PendingBadge counts={service.tool_counts} />}
+                  {service.tier === "template" &&
+                    (service.tool_counts?.active ?? 0) +
+                      (service.tool_counts?.pending_review ?? 0) ===
+                      0 && (
+                      <p className="text-xs text-muted-foreground">
+                        No tools imported yet — a user must connect first (or use Sync after a user
+                        connects)
+                      </p>
+                    )}
                 </TableCell>
                 <TableCell>
                   <Switch
