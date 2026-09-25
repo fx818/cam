@@ -29,11 +29,15 @@ interface Draft {
   slug: string
   name: string
   url: string
+  specUrl: string
   transport: string
   description: string
   authType: string
   headerName: string
   credential: string
+  apiKeyName: string
+  apiKeyIn: string
+  username: string
   timeoutMs: string
   responseCap: string
 }
@@ -43,11 +47,15 @@ const initialDraft: Draft = {
   slug: "",
   name: "",
   url: "",
+  specUrl: "",
   transport: "streamable-http",
   description: "",
   authType: "none",
   headerName: "X-Api-Key",
   credential: "",
+  apiKeyName: "X-Api-Key",
+  apiKeyIn: "header",
+  username: "",
   timeoutMs: "15000",
   responseCap: "8192",
 }
@@ -59,6 +67,8 @@ interface TestResult {
   tools?: { name: string; description?: string | null }[]
   message?: string
 }
+
+const trunc = (text: string, max = 120) => (text.length > max ? `${text.slice(0, max)}…` : text)
 
 export function RegisterServicePage() {
   const navigate = useNavigate()
@@ -80,8 +90,16 @@ export function RegisterServicePage() {
       if (!draft.name.trim()) return "Name is required."
       if (!/^https?:\/\//.test(draft.url)) return "URL must start with http(s)://."
     }
-    if (step === 2 && draft.authType !== "none" && !draft.credential)
-      return "A credential is required for this auth type."
+    if (step === 2) {
+      if (draft.authType !== "none" && !draft.credential)
+        return "A credential is required for this auth type."
+      if (draft.authType === "api-key" && !draft.apiKeyName.trim())
+        return "API key auth requires a key name."
+      if (draft.authType === "basic" && !draft.username.trim())
+        return "Basic auth requires a username."
+    }
+    if (step === 1 && draft.kind === "rest" && draft.specUrl && !/^https?:\/\//.test(draft.specUrl))
+      return "OpenAPI spec URL must start with http(s)://."
     return null
   }
 
@@ -100,18 +118,32 @@ export function RegisterServicePage() {
     setStep((prev) => Math.max(prev - 1, 0))
   }
 
-  const requestBody = () => ({
-    slug: draft.slug,
-    name: draft.name,
-    url: draft.url,
-    transport: draft.kind === "mcp" ? draft.transport : null,
-    auth_type: draft.authType,
-    header_name: draft.authType === "static-header" ? draft.headerName : null,
-    credential: draft.authType === "none" ? null : draft.credential,
-    description: draft.description,
-    timeout_ms: Number(draft.timeoutMs),
-    response_cap_tokens: Number(draft.responseCap),
-  })
+  const requestBody = () => {
+    const selected = testResult?.tools?.length
+      ? selectedTools.filter((name) => testResult.tools?.some((tool) => tool.name === name))
+      : []
+    const deselected = draft.kind === "rest" && testResult?.tools
+      ? testResult.tools.length - selected.length
+      : 0
+    return {
+      kind: draft.kind,
+      slug: draft.slug,
+      name: draft.name,
+      url: draft.url,
+      transport: draft.kind === "mcp" ? draft.transport : null,
+      spec_url: draft.kind === "rest" && draft.specUrl ? draft.specUrl : null,
+      auth_type: draft.authType,
+      header_name: draft.authType === "static-header" ? draft.headerName : null,
+      credential: draft.authType === "none" ? null : draft.credential,
+      api_key_name: draft.authType === "api-key" ? draft.apiKeyName : null,
+      api_key_in: draft.authType === "api-key" ? draft.apiKeyIn : null,
+      username: draft.authType === "basic" ? draft.username : null,
+      tools: deselected > 0 ? selected : undefined,
+      description: draft.description,
+      timeout_ms: Number(draft.timeoutMs),
+      response_cap_tokens: Number(draft.responseCap),
+    }
+  }
 
   const runTest = async () => {
     setTestRunning(true)
@@ -156,7 +188,7 @@ export function RegisterServicePage() {
       <div>
         <h1 className="text-2xl font-semibold">Register service</h1>
         <p className="text-sm text-muted-foreground">
-          Connect an MCP server so your agents can use its tools through CAM.
+          Connect an MCP server or REST API so your agents can use its tools through CAM.
         </p>
       </div>
 
@@ -193,13 +225,15 @@ export function RegisterServicePage() {
             </button>
             <button
               type="button"
-              disabled
-              className="w-full cursor-not-allowed rounded-md border border-dashed p-4 text-left opacity-60"
+              className={`w-full rounded-md border p-4 text-left ${
+                draft.kind === "rest" ? "border-primary" : ""
+              }`}
+              onClick={() => set("kind", "rest")}
             >
               <p className="font-medium">REST API</p>
               <p className="text-sm text-muted-foreground">
-                Personal REST APIs are not yet supported; admins register shared REST APIs
-                in Admin services.
+                Register a REST API from its OpenAPI spec; each operation becomes a tool for
+                your agents.
               </p>
             </button>
           </CardContent>
@@ -234,11 +268,27 @@ export function RegisterServicePage() {
               <Label htmlFor="reg-url">URL</Label>
               <Input
                 id="reg-url"
-                placeholder="https://mcp.example.com/mcp"
+                placeholder={
+                  draft.kind === "rest" ? "https://api.example.com" : "https://mcp.example.com/mcp"
+                }
                 value={draft.url}
                 onChange={(event) => set("url", event.target.value)}
               />
             </div>
+            {draft.kind === "rest" && (
+              <div className="space-y-1">
+                <Label htmlFor="reg-spec">OpenAPI spec URL (optional)</Label>
+                <Input
+                  id="reg-spec"
+                  placeholder="https://api.example.com/openapi.json"
+                  value={draft.specUrl}
+                  onChange={(event) => set("specUrl", event.target.value)}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Leave blank to use the service URL as the spec location.
+                </p>
+              </div>
+            )}
             {draft.kind === "mcp" && (
               <div className="space-y-1">
                 <Label>Transport</Label>
@@ -285,6 +335,8 @@ export function RegisterServicePage() {
                   <SelectItem value="none">None</SelectItem>
                   <SelectItem value="static-header">Static header</SelectItem>
                   <SelectItem value="bearer">Bearer token</SelectItem>
+                  <SelectItem value="api-key">API key</SelectItem>
+                  <SelectItem value="basic">Basic</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -296,17 +348,61 @@ export function RegisterServicePage() {
                   value={draft.headerName}
                   onChange={(event) => set("headerName", event.target.value)}
                 />
+                <p className="text-xs text-muted-foreground">
+                  The credential below is sent as the full value of this header.
+                </p>
+              </div>
+            )}
+            {draft.authType === "api-key" && (
+              <>
+                <div className="space-y-1">
+                  <Label htmlFor="reg-apikey-name">API key name</Label>
+                  <Input
+                    id="reg-apikey-name"
+                    value={draft.apiKeyName}
+                    onChange={(event) => set("apiKeyName", event.target.value)}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label>Send in</Label>
+                  <Select value={draft.apiKeyIn} onValueChange={(v) => set("apiKeyIn", v)}>
+                    <SelectTrigger className="w-40">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="header">header</SelectItem>
+                      <SelectItem value="query">query</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </>
+            )}
+            {draft.authType === "basic" && (
+              <div className="space-y-1">
+                <Label htmlFor="reg-username">Username</Label>
+                <Input
+                  id="reg-username"
+                  value={draft.username}
+                  onChange={(event) => set("username", event.target.value)}
+                />
               </div>
             )}
             {draft.authType !== "none" && (
               <div className="space-y-1">
-                <Label htmlFor="reg-cred">Credential</Label>
+                <Label htmlFor="reg-cred">
+                  {draft.authType === "basic" ? "Password" : "Credential"}
+                </Label>
                 <Input
                   id="reg-cred"
                   type="password"
                   value={draft.credential}
                   onChange={(event) => set("credential", event.target.value)}
                 />
+                {draft.authType === "bearer" && (
+                  <p className="text-xs text-muted-foreground">
+                    The value is sent as `Authorization: Bearer &lt;value&gt;`.
+                  </p>
+                )}
               </div>
             )}
           </CardContent>
@@ -318,7 +414,7 @@ export function RegisterServicePage() {
           <CardHeader>
             <CardTitle>Test connection</CardTitle>
             <CardDescription>
-              CAM reaches the endpoint and lists the tools it exposes.
+              CAM reaches the endpoint and lists the operations it can call.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
@@ -334,9 +430,14 @@ export function RegisterServicePage() {
                   <p className="text-sm text-muted-foreground">{testResult.message}</p>
                 )}
                 {testResult.tools && testResult.tools.length > 0 && (
-                  <ul className="list-inside list-disc text-sm text-muted-foreground">
+                  <ul className="list-inside list-disc space-y-1 text-sm text-muted-foreground">
                     {testResult.tools.map((tool) => (
-                      <li key={tool.name}>{tool.name}</li>
+                      <li key={tool.name}>
+                        {tool.name}
+                        {draft.kind === "rest" && tool.description
+                          ? ` — ${trunc(tool.description)}`
+                          : null}
+                      </li>
                     ))}
                   </ul>
                 )}
@@ -359,7 +460,7 @@ export function RegisterServicePage() {
             {testResult?.tools && testResult.tools.length > 0 ? (
               <ul className="space-y-2">
                 {testResult.tools.map((tool) => (
-                  <li key={tool.name} className="flex items-center gap-2">
+                  <li key={tool.name} className="flex items-baseline gap-2">
                     <input
                       type="checkbox"
                       checked={selectedTools.includes(tool.name)}
@@ -372,6 +473,11 @@ export function RegisterServicePage() {
                       }
                     />
                     <span className="text-sm">{tool.name}</span>
+                    {draft.kind === "rest" && tool.description && (
+                      <span className="text-xs text-muted-foreground">
+                        {trunc(tool.description)}
+                      </span>
+                    )}
                   </li>
                 ))}
               </ul>
@@ -421,6 +527,8 @@ export function RegisterServicePage() {
           </CardHeader>
           <CardContent className="space-y-3">
             <dl className="grid grid-cols-3 gap-2 text-sm">
+              <dt className="text-muted-foreground">Kind</dt>
+              <dd className="col-span-2">{draft.kind}</dd>
               <dt className="text-muted-foreground">Slug</dt>
               <dd className="col-span-2">{draft.slug}</dd>
               <dt className="text-muted-foreground">Name</dt>
