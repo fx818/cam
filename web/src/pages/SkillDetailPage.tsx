@@ -1,10 +1,18 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Link, useParams } from "react-router-dom"
+import { useNavigate, Link, useParams } from "react-router-dom"
 import { useState } from "react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
@@ -166,6 +174,20 @@ export function SkillDetailPage() {
   const shownDescription = editedDescription ?? skill.description
   const shownBody = editedBody ?? bodyOf(skillMd.content)
   const canManage = skill.viewer.can_manage
+  const navigate = useNavigate()
+  const [deleteOpen, setDeleteOpen] = useState(false)
+
+  const deleteSkill = useMutation({
+    mutationFn: async () => apiFetch(skillsPath(ref), { method: "DELETE" }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["skills"] })
+      navigate("/skills")
+    },
+    onError: (err) => {
+      setDeleteOpen(false)
+      setActionError(err instanceof ApiError ? err.message : "Could not delete the skill.")
+    },
+  })
 
   return (
     <div className="space-y-6 p-6">
@@ -192,10 +214,41 @@ export function SkillDetailPage() {
             </p>
           )}
         </div>
-        <Button variant="outline" asChild>
-          <Link to="/skills">All skills</Link>
-        </Button>
+        <div className="flex shrink-0 items-center gap-2">
+          {canManage && (
+            <Button
+              variant="destructive"
+              onClick={() => setDeleteOpen(true)}
+              aria-label={`Delete ${skill.name}`}
+            >
+              Delete skill
+            </Button>
+          )}
+          <Button variant="outline" asChild>
+            <Link to="/skills">All skills</Link>
+          </Button>
+        </div>
       </div>
+
+      <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete “{skill.name}”?</DialogTitle>
+            <DialogDescription>
+              Removes the skill and its version history for this workspace. Agents stop seeing it
+              on their next tools/list. Audit history is kept.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteOpen(false)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" disabled={deleteSkill.isPending} onClick={() => deleteSkill.mutate()}>
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Tabs value={tab} onValueChange={(value) => setTab(value)}>
         <TabsList>
