@@ -792,14 +792,16 @@ export function ServiceDetailPage() {
       <Tabs defaultValue="tools">
         <TabsList>
           <TabsTrigger value="tools">Tools</TabsTrigger>
-          {viewer.is_owner && (
+          {viewer.can_manage && (
             <TabsTrigger value="connection">Connection</TabsTrigger>
           )}
-          {viewer.is_owner && viewer.can_manage && (
+          {viewer.is_owner && (
             <TabsTrigger value="sharing">Sharing</TabsTrigger>
           )}
-          {viewer.is_owner && <TabsTrigger value="activity">Activity</TabsTrigger>}
-          {viewer.is_owner && <TabsTrigger value="settings">Settings</TabsTrigger>}
+          {viewer.can_manage && (
+            <TabsTrigger value="activity">Activity</TabsTrigger>
+          )}
+          {viewer.can_manage && <TabsTrigger value="settings">Settings</TabsTrigger>}
         </TabsList>
         <TabsContent value="tools" className="mt-4">
           <ToolsTab refPath={refPath} canManage={viewer.can_manage} />
