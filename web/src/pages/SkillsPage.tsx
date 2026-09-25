@@ -175,6 +175,34 @@ function UploadDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v:
             <TabsTrigger value="zip">Zip</TabsTrigger>
           </TabsList>
         </Tabs>
+        {user?.role === "admin" && (
+          <div className="grid gap-1">
+            <Label htmlFor="skill-tier">Visibility</Label>
+            <div className="flex gap-4 text-sm">
+              <label className="flex items-center gap-1.5">
+                <input
+                  type="radio"
+                  name="skill-tier"
+                  checked={tier === "personal"}
+                  onChange={() => setTier("personal")}
+                />
+                Personal (yours)
+              </label>
+              <label className="flex items-center gap-1.5">
+                <input
+                  type="radio"
+                  name="skill-tier"
+                  checked={tier === "global"}
+                  onChange={() => setTier("global")}
+                />
+                Global (everyone)
+              </label>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Global skills appear for every user; visibility can still be restricted later.
+            </p>
+          </div>
+        )}
         {tab === "editor" && (
           <div className="grid gap-3">
             <div className="grid grid-cols-2 gap-3">
@@ -191,34 +219,6 @@ function UploadDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v:
                   }}
                 />
               </div>
-              {user?.role === "admin" && (
-                <div className="grid gap-1">
-                  <Label htmlFor="skill-tier">Visibility</Label>
-                  <div className="flex gap-4 text-sm">
-                    <label className="flex items-center gap-1.5">
-                      <input
-                        type="radio"
-                        name="skill-tier"
-                        checked={tier === "personal"}
-                        onChange={() => setTier("personal")}
-                      />
-                      Personal (yours)
-                    </label>
-                    <label className="flex items-center gap-1.5">
-                      <input
-                        type="radio"
-                        name="skill-tier"
-                        checked={tier === "global"}
-                        onChange={() => setTier("global")}
-                      />
-                      Global (everyone)
-                    </label>
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    Global skills appear for every user; visibility can still be restricted later.
-                  </p>
-                </div>
-              )}
               <div className="grid gap-1">
                 <Label htmlFor="skill-slug">Slug (optional)</Label>
                 <Input
