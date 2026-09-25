@@ -8,6 +8,7 @@ return `{connection}` after upserting the encrypted credential.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Annotated, Any
 from uuid import UUID
 
@@ -25,8 +26,11 @@ from cam.connections.oauth import OAuthFlowError, complete_authorize, start_auth
 from cam.connections.orgs import get_org_data_key
 from cam.connections.tokens import AuthenticatedIdentity
 from cam.db.models import CamToken, Connection, OAuthState, Service, User
+from cam.registry.resync import ResyncOutcome, resync_service_id
 
 router = APIRouter(prefix="/api", tags=["connect"])
+
+_FALLBACK_TASKS: set[asyncio.Task[ResyncOutcome]] = set()
 
 IdentityDep = Annotated[SessionIdentity, Depends(require_user)]
 
@@ -159,7 +163,7 @@ async def _upsert_secret_connection(
 
 async def _ensure_no_auth_connection(
     session: AsyncSession, *, service: Service, user_id: UUID | None
-) -> Connection:
+) -> tuple[Connection, bool]:
     result = await session.execute(
         select(Connection).where(
             Connection.org_id == service.org_id,
@@ -177,7 +181,24 @@ async def _ensure_no_auth_connection(
         )
         session.add(connection)
         await session.flush()
-    return connection
+        return connection, True
+    return connection, False
+
+
+def _enqueue_import(request: Request, service: Service) -> None:
+    """Ask the app's resync coordinator to import tools now that a connection
+    became usable (templates have no org credential, so this is how their
+    first import happens). Fire-and-forget: the coordinator debounces and the
+    per-service resync lock makes repeated enqueues cheap; the fallback task
+    uses the same lock via `skip_if_running`."""
+    coordinator = getattr(request.app.state, "resync_coordinator", None)
+    if coordinator is not None:
+        coordinator.enqueue(service.id)
+        return
+    session_factory = request.app.state.session_factory
+    task = asyncio.create_task(resync_service_id(session_factory, service.id, skip_if_running=True))
+    _FALLBACK_TASKS.add(task)
+    task.add_done_callback(_FALLBACK_TASKS.discard)
 
 
 async def _connect_service(
@@ -200,8 +221,12 @@ async def _connect_service(
             await db.commit()
             return {"authorize_url": authorize_url}
         if service.auth_type == "none":
-            connection = await _ensure_no_auth_connection(db, service=service, user_id=user_id)
+            connection, created = await _ensure_no_auth_connection(
+                db, service=service, user_id=user_id
+            )
             await db.commit()
+            if created:
+                _enqueue_import(request, service)
             return {"connection": connection_public(connection)}
         if body.credential is None or not body.credential.strip():
             raise ApiProblem("VALIDATION_ERROR", "credential is required for this auth type", 422)
@@ -209,6 +234,7 @@ async def _connect_service(
             db, service=service, user_id=user_id, credential=body.credential.strip()
         )
         await db.commit()
+        _enqueue_import(request, service)
         return {"connection": connection_public(connection)}
 
 
@@ -272,4 +298,5 @@ async def oauth_callback(
         except OAuthFlowError as exc:
             raise ApiProblem("BAD_REQUEST", str(exc), 400) from None
         await db.commit()
+        _enqueue_import(request, service)
     return RedirectResponse(url=f"{base}/", status_code=302)
