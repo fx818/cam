@@ -1,7 +1,8 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link } from "react-router-dom"
 import { useState } from "react"
 
+import { ConnectDialog, type ConnectTarget } from "@/components/ConnectDialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { ApiError, apiFetch } from "@/lib/api"
@@ -17,13 +18,9 @@ function healthVariant(health: string): "success" | "destructive" | "warning" | 
 function ServiceRow({
   service,
   onConnect,
-  connectPending,
-  connectError,
 }: {
   service: DashboardService
   onConnect?: (service: DashboardService) => void
-  connectPending?: boolean
-  connectError?: string | null
 }) {
   const detailPath =
     service.tier === "template" ? null : `/services/${service.id}`
@@ -54,18 +51,13 @@ function ServiceRow({
             {service.description}
           </p>
         )}
-        {connectError && <p className="mt-1 text-xs text-destructive">{connectError}</p>}
       </div>
       <div className="flex shrink-0 items-center gap-2">
         {service.group === "templates" &&
           (service.connection ? (
             <Badge variant="success">connected</Badge>
           ) : (
-            <Button
-              size="sm"
-              disabled={connectPending}
-              onClick={() => onConnect?.(service)}
-            >
+            <Button size="sm" onClick={() => onConnect?.(service)}>
               Connect
             </Button>
           ))}
@@ -85,16 +77,12 @@ function Section({
   services,
   emptyText,
   onConnect,
-  connectPending,
-  connectErrors,
 }: {
   title: string
   description: string
   services: DashboardService[]
   emptyText: string
   onConnect?: (service: DashboardService) => void
-  connectPending?: boolean
-  connectErrors?: Record<string, string | null>
 }) {
   return (
     <section>
@@ -115,8 +103,6 @@ function Section({
               key={`${service.group}:${service.id}`}
               service={service}
               onConnect={onConnect}
-              connectPending={connectPending}
-              connectError={connectErrors?.[service.id] ?? null}
             />
           ))}
         </div>
@@ -127,28 +113,11 @@ function Section({
 
 export function MyServicesPage() {
   const queryClient = useQueryClient()
-  const [connectErrors, setConnectErrors] = useState<Record<string, string | null>>({})
+  const [connectTarget, setConnectTarget] = useState<ConnectTarget | null>(null)
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["services"],
     queryFn: () => apiFetch<ServicesListResponse>("/api/services"),
-  })
-
-  const connectMutation = useMutation({
-    mutationFn: (service: DashboardService) =>
-      apiFetch<unknown>(`/api/services/${service.id}/connect`, {
-        method: "POST",
-        body: {},
-      }),
-    onSuccess: () => {
-      setConnectErrors((prev) => ({ ...prev }))
-      void queryClient.invalidateQueries({ queryKey: ["services"] })
-    },
-    onError: (err, service) => {
-      const message =
-        err instanceof ApiError ? err.message : "Could not connect. Try again."
-      setConnectErrors((prev) => ({ ...prev, [service.id]: message }))
-    },
   })
 
   const services = data?.services ?? []
@@ -188,9 +157,7 @@ export function MyServicesPage() {
             description="Connect your own account once; share it like any service."
             services={byGroup("templates")}
             emptyText="No templates available yet."
-            onConnect={(service) => connectMutation.mutate(service)}
-            connectPending={connectMutation.isPending}
-            connectErrors={connectErrors}
+            onConnect={(service) => setConnectTarget({ id: service.id, name: service.name })}
           />
           <Section
             title="My services"
@@ -205,6 +172,19 @@ export function MyServicesPage() {
             emptyText="Nothing has been shared with you yet."
           />
         </div>
+      )}
+
+      {connectTarget && (
+        <ConnectDialog
+          target={connectTarget}
+          open
+          onOpenChange={(open) => {
+            if (!open) {
+              setConnectTarget(null)
+              void queryClient.invalidateQueries({ queryKey: ["services"] })
+            }
+          }}
+        />
       )}
     </div>
   )

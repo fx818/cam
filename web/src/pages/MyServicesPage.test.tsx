@@ -1,11 +1,38 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { render, screen } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import { MemoryRouter } from "react-router-dom"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
-import type { ServicesListResponse } from "@/lib/types"
+import type { ServiceDetailResponse, ServicesListResponse } from "@/lib/types"
 
 import { MyServicesPage } from "./MyServicesPage"
+
+const notionDetail: ServiceDetailResponse = {
+  service: {
+    id: "global/notion",
+    tier: "template",
+    name: "Notion",
+    description: "",
+    slug: "notion",
+    kind: "rest",
+    url: "https://api.notion.com",
+    transport: null,
+    spec_url: null,
+    auth_type: "oauth",
+    auth_config: {},
+    visibility: "all",
+    timeout_ms: 30000,
+    response_cap_tokens: 50000,
+    status: "active",
+    health: "unknown",
+    last_synced_at: null,
+    created_at: null,
+    owner: null,
+  },
+  connection: null,
+  viewer: { is_owner: true, is_admin: false, can_manage: true, is_shared: false },
+}
 
 const services: ServicesListResponse = {
   services: [
@@ -114,6 +141,47 @@ describe("MyServicesPage", () => {
   it("offers Connect for unconnected templates", async () => {
     renderPage()
     expect(await screen.findByRole("button", { name: "Connect" })).toBeInTheDocument()
+  })
+
+  it("opens the connect dialog and redirects for OAuth templates", async () => {
+    const user = userEvent.setup()
+    const assign = vi.fn()
+    Object.defineProperty(window, "location", {
+      value: { ...window.location, assign },
+      writable: true,
+    })
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input)
+        if (init?.method === "POST") {
+          return {
+            ok: true,
+            status: 200,
+            text: async () =>
+              JSON.stringify({ authorize_url: "https://oauth.example/authorize?state=s1" }),
+          }
+        }
+        if (url === "/api/services") {
+          return {
+            ok: true,
+            status: 200,
+            text: async () => JSON.stringify(services),
+          }
+        }
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify(notionDetail),
+        }
+      }),
+    )
+    renderPage()
+    await user.click(await screen.findByRole("button", { name: "Connect" }))
+    await user.click(await screen.findByRole("button", { name: "Authorize" }))
+    await vi.waitFor(() => {
+      expect(assign).toHaveBeenCalledWith("https://oauth.example/authorize?state=s1")
+    })
   })
 
   it("links personal services to their detail page", async () => {

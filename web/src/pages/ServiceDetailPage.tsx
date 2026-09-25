@@ -3,6 +3,7 @@ import { useState } from "react"
 import { useNavigate, useParams } from "react-router-dom"
 
 import { Alert } from "@/components/ui/alert"
+import { ConnectDialog } from "@/components/ConnectDialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -737,6 +738,7 @@ function SettingsTab({
 export function ServiceDetailPage() {
   const { owner = "", slug = "" } = useParams()
   const refPath = `${owner}/${slug}`
+  const [connectOpen, setConnectOpen] = useState(false)
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["service", refPath],
@@ -770,15 +772,7 @@ export function ServiceDetailPage() {
         </div>
         <div className="flex gap-2">
           {viewer.is_owner && !connection && (
-            <Button
-              variant="outline"
-              onClick={() => {
-                void apiFetch(`/api/services/${refPath}/connect`, {
-                  method: "POST",
-                  body: {},
-                }).catch(() => undefined)
-              }}
-            >
+            <Button variant="outline" onClick={() => setConnectOpen(true)}>
               Connect
             </Button>
           )}
@@ -823,6 +817,15 @@ export function ServiceDetailPage() {
           <SettingsTab refPath={refPath} canManage={viewer.can_manage} />
         </TabsContent>
       </Tabs>
+
+      {viewer.is_owner && !connection && (
+        <ConnectDialog
+          target={{ id: refPath, name: service.name }}
+          open={connectOpen}
+          onOpenChange={setConnectOpen}
+          detail={{ auth_type: service.auth_type, auth_config: service.auth_config }}
+        />
+      )}
     </div>
   )
 }

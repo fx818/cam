@@ -237,6 +237,22 @@ Numbers/sign-offs pending owner.
 - Checks: web `npx tsc --noEmit`, `npm test` (19), `npm run build` all green. No backend changes.
 - Gap noted (backend, not wizard): the REST test step honors only `spec_url`-based OpenAPI discovery; api-key-in-query auth for REST is supported at test/registration, but manual per-operation REST overrides (method/path editing per tool in the wizard) is not offered — tools must come from the spec or later via `POST /api/services/{owner}/{slug}/tools`.
 
+## 2026-09-25 — fix/dashboard: Connect dialog for template credentials and OAuth redirect
+
+- The dashboard's Connect button blindly POSTed `{}` to `/api/services/{owner}/{slug}/connect` with no input UI: a template with bearer/static-header (or api-key/basic) auth returned 422 "credential is required for this auth type" and the owner had nowhere to type it. For OAuth templates the server's `{"authorize_url"}` response was ignored — no redirect happened. Backend `routes/connect.py` was correct as-is; this is a frontend fix only.
+- New `web/src/components/ConnectDialog.tsx` — opened by the Connect button on **not-yet-connected templates** (My services → Templates) and by the header Connect button on the service detail page. Dialog content keyed off `service.auth_type` (fetched via `GET /api/services/{ref}` — the list payload does not include auth_type/auth_config, so the dialog fetches the detail row; hints render only when auth_config exposes the fixed field):
+  - **none:** no fields; connects immediately on open (POST `{}`), dialog shows progress/closed on success.
+  - **oauth:** no fields; "Authorize" → POST `{}` → server's `authorize_url` → `window.location.assign`; browser comes back via `/api/oauth/callback` → dashboard. Dialog stays open until redirect.
+  - **static-header:** read-only hint "Header name: <header_name from auth_config>" + one password input (hint: CAM sends the value exactly as entered — include any prefix such as `Bearer `).
+  - **bearer:** hint "enter the token WITHOUT the 'Bearer ' prefix" (server composes `Authorization: Bearer <value>`).
+  - **api-key:** hint shows key name + location (header/query) from auth_config when present, else generic; one value input.
+  - **basic:** hint shows template-fixed username; one password input.
+  - Submit → POST `/connect` with `{credential}` → invalidate `services` (+ `service`) queries → badge flips to "connected". `none` template cards already showed the badge via the existing connection summary.
+- Errors surfaced in-dialog over the form (`ApiError.message`, same pattern as existing handling) — 422/403/400 all render as an alert line; dialog stays open.
+- Tests: new `web/src/components/ConnectDialog.test.tsx` (8) — bearer hint + disabled Connect until value, endpoint+body assertions, error surface, static-header/api-key/basic hint rendering from auth_config, OAuth POST-then-redirect (mocked `window.location.assign`), none-type connects automatically with `{}`; `MyServicesPage.test.tsx` (+1) — page-level OAuth click-through ends in the redirect.
+- Checks: `npx tsc --noEmit`, `npm test` (28, was 19), `npm run build` all green. No backend changes; `npm run generate:api` not needed (no API shape change).
+- **Manual check for owner:** log in, My services → Templates → GKE template → Connect → dialog asks for the template's credential type (e.g. bearer token without prefix, or header value with prefix); enter your credential → Connect; card badge shows "connected". For the OAuth template: Connect → Authorize → browser navigates to the provider and back; connection appears after redirect.
+
 ## Open questions
 
 Resolved by coordinator (2026-09-24, Phase 2):
