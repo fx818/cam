@@ -168,3 +168,59 @@ def test_derive_slug_and_valid_slug() -> None:
         derive_slug("!!!")
     with pytest.raises(SkillValidationError):
         valid_slug("Bad Slug")
+
+
+def test_folded_multiline_description_accepted() -> None:
+    text = (
+        "---\n"
+        "name: ponytail\n"
+        "description: >\n"
+        "  Forces the laziest solution that actually works, simplest, shortest, most\n"
+        "  minimal. Channels a senior dev who has seen everything.\n"
+        'argument-hint: "[lite|full|ultra]"\n'
+        "license: MIT\n"
+        "---\n"
+        "\n"
+        "Body\n"
+    )
+    meta, requires, body = split_skill_md(text)
+    assert meta["name"] == "ponytail"
+    assert meta["description"] == (
+        "Forces the laziest solution that actually works, simplest, shortest, most"
+        " minimal. Channels a senior dev who has seen everything."
+    )
+    assert meta["argument-hint"] == "[lite|full|ultra]"
+    assert meta["license"] == "MIT"
+    assert requires == []
+    assert body.strip().startswith("Body")
+
+
+def test_literal_block_description_accepted() -> None:
+    text = (
+        "---\n"
+        "name: x\n"
+        "description: |\n"
+        "  Line one\n"
+        "  Line two\n"
+        "requires:\n"
+        "  - global/pns\n"
+        "  - global/gke-mcp\n"
+        "---\n"
+        "body\n"
+    )
+    meta, requires, body = split_skill_md(text)
+    assert "Line one" in meta["description"] and "Line two" in meta["description"]
+    assert requires == ["global/pns", "global/gke-mcp"]
+    assert body.startswith("body")
+
+
+def test_nested_mapping_frontmatter_flattened() -> None:
+    text = "---\nname: x\ndescription: d\nmetadata:\n  author: Jane\n  team: data\n---\nbody\n"
+    meta, _requires, _body = split_skill_md(text)
+    assert "author: Jane" in meta["metadata"]
+
+
+def test_invalid_yaml_rejected() -> None:
+    text = "---\nname: x\n  bad: [:d\n---\nbody\n"
+    with pytest.raises(SkillValidationError, match="YAML"):
+        split_skill_md(text)

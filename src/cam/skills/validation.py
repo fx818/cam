@@ -6,6 +6,9 @@ import zipfile
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from typing import cast
+
+import yaml
 
 from cam.access.resolution import ServiceNotFound, parse_service_ref
 
@@ -56,52 +59,67 @@ def _strip(value: str) -> str:
     return value
 
 
+def _plain_scalar(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, list):
+        parts = [_plain_scalar(entry) for entry in cast("list[object]", value)]
+        return ", ".join(part for part in parts if part)
+    if isinstance(value, dict):
+        parts = [
+            f"{key}: {_plain_scalar(entry)}"
+            for key, entry in cast("dict[str, object]", value).items()
+        ]
+        return ", ".join(part for part in parts if part)
+    text = str(value).strip()
+    return text
+
+
+def _requires_items(value: object) -> list[str]:
+    items: list[str]
+    if value is None:
+        return []
+    if isinstance(value, list):
+        items = [_plain_scalar(entry) for entry in cast("list[object]", value)]
+    elif isinstance(value, str):
+        text = _strip(value)
+        if text.startswith("[") and text.endswith("]"):
+            text = text[1:-1]
+        items = [_strip(part) for part in text.split(",")] if text else []
+    else:
+        raise SkillValidationError("'requires' must be a list of service refs like [global/pns]")
+    return [item for item in items if item]
+
+
 def _parse_raw_frontmatter(text: str) -> tuple[dict[str, str], list[str], str]:
     lines = text.split("\n")
     if not lines or lines[0].strip() != "---":
         raise SkillValidationError(f"{SKILL_MD} must start with a YAML frontmatter block")
-    index = 1
-    meta: dict[str, str] = {}
-    requires: list[str] = []
-    current_key: str | None = None
-    while index < len(lines):
-        line = lines[index]
-        stripped = line.strip()
-        if stripped == "---":
-            body = "\n".join(lines[index + 1 :])
-            meta.setdefault("name", "")
-            meta.setdefault("description", "")
-            return meta, requires, body
-        if not stripped or stripped.startswith("#"):
-            index += 1
-            continue
-        if line.startswith((" ", "-", "\t")):
-            if current_key == "requires" and stripped.startswith("-"):
-                entry = _strip(stripped.lstrip("-"))
-                if entry:
-                    requires.append(entry)
-                index += 1
-                continue
-            raise SkillValidationError("frontmatter must be a simple key: value mapping")
-        key, sep, raw_value = stripped.partition(":")
-        if not sep or not key.strip():
-            raise SkillValidationError("frontmatter must be a simple key: value mapping")
-        current_key = key.strip()
-        value = raw_value.strip()
-        if value:
-            if current_key == "requires":
-                if not (value.startswith("[") and value.endswith("]")):
-                    raise SkillValidationError(
-                        "'requires' must be a list, e.g. [global/pns] or one entry per '- ' line"
-                    )
-                for item in value[1:-1].split(","):
-                    cleaned = _strip(item)
-                    if cleaned:
-                        requires.append(cleaned)
-            else:
-                meta[current_key] = _strip(value)
-        index += 1
-    raise SkillValidationError("frontmatter is missing its closing '---' line")
+    end: int | None = None
+    for index in range(1, len(lines)):
+        if lines[index].strip() == "---":
+            end = index
+            break
+    if end is None:
+        raise SkillValidationError("frontmatter is missing its closing '---' line")
+    block = "\n".join(lines[1:end])
+    body = "\n".join(lines[end + 1 :])
+    try:
+        parsed: object = yaml.safe_load(block) or {}
+    except yaml.YAMLError as exc:
+        raise SkillValidationError(f"frontmatter is not valid YAML: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise SkillValidationError("frontmatter must be a YAML mapping of keys to values")
+    mapping = cast("dict[str, object]", parsed)
+    meta = {str(key): _plain_scalar(value) for key, value in mapping.items()}
+    meta.setdefault("name", "")
+    meta.setdefault("description", "")
+    requires = _requires_items(mapping.get("requires"))
+    return meta, requires, body
 
 
 def split_skill_md(text: str) -> tuple[dict[str, str], list[str], str]:
