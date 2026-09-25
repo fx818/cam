@@ -256,7 +256,9 @@ export function SkillDetailPage() {
           <TabsTrigger value="preview">Preview</TabsTrigger>
           {canManage && <TabsTrigger value="edit">Edit</TabsTrigger>}
           <TabsTrigger value="history">History</TabsTrigger>
-          {canManage && <TabsTrigger value="sharing">Sharing</TabsTrigger>}
+          {skill.tier === "personal" && skill.viewer.is_owner && (
+            <TabsTrigger value="sharing">Sharing</TabsTrigger>
+          )}
           {skill.tier === "global" && canManage && (
             <TabsTrigger value="settings">Settings</TabsTrigger>
           )}
