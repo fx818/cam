@@ -90,9 +90,11 @@ function entrySubtitle(entry: SkillEntry): string {
 }
 
 function UploadDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
+  const { user } = useAuth()
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const [tab, setTab] = useState<"editor" | "files" | "zip">("editor")
+  const [tier, setTier] = useState<"personal" | "global">("personal")
   const [name, setName] = useState("")
   const [slug, setSlug] = useState("")
   const [description, setDescription] = useState("")
@@ -125,17 +127,18 @@ function UploadDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v:
     setZipPayload(null)
     setError(null)
     setTab("editor")
+    setTier("personal")
   }
 
   function submit() {
     const slugPart = slug.trim() ? { slug: slug.trim() } : {}
     if (zipPayload !== null) {
-      create.mutate({ tier: "personal", ...slugPart, zip_base64: zipPayload })
+      create.mutate({ tier, ...slugPart, zip_base64: zipPayload })
     } else if (filesPayload.length > 0) {
-      create.mutate({ tier: "personal", ...slugPart, files: filesPayload })
+      create.mutate({ tier, ...slugPart, files: filesPayload })
     } else if (name.trim() && description.trim()) {
       create.mutate({
-        tier: "personal",
+        tier,
         ...slugPart,
         name: name.trim(),
         description: description.trim(),
@@ -188,6 +191,34 @@ function UploadDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v:
                   }}
                 />
               </div>
+              {user?.role === "admin" && (
+                <div className="grid gap-1">
+                  <Label htmlFor="skill-tier">Visibility</Label>
+                  <div className="flex gap-4 text-sm">
+                    <label className="flex items-center gap-1.5">
+                      <input
+                        type="radio"
+                        name="skill-tier"
+                        checked={tier === "personal"}
+                        onChange={() => setTier("personal")}
+                      />
+                      Personal (yours)
+                    </label>
+                    <label className="flex items-center gap-1.5">
+                      <input
+                        type="radio"
+                        name="skill-tier"
+                        checked={tier === "global"}
+                        onChange={() => setTier("global")}
+                      />
+                      Global (everyone)
+                    </label>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Global skills appear for every user; visibility can still be restricted later.
+                  </p>
+                </div>
+              )}
               <div className="grid gap-1">
                 <Label htmlFor="skill-slug">Slug (optional)</Label>
                 <Input

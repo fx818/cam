@@ -106,6 +106,21 @@ export function SkillDetailPage() {
   const skill = detail.data?.skill
   const skillMd = (skill?.files ?? []).find((file) => file.path === "SKILL.md")
 
+  const navigate = useNavigate()
+  const [deleteOpen, setDeleteOpen] = useState(false)
+
+  const deleteSkill = useMutation({
+    mutationFn: async () => apiFetch(skillsPath(ref), { method: "DELETE" }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["skills"] })
+      navigate("/skills")
+    },
+    onError: (err) => {
+      setDeleteOpen(false)
+      setActionError(err instanceof ApiError ? err.message : "Could not delete the skill.")
+    },
+  })
+
   const save = useMutation({
     mutationFn: async (body: SaveSkillBody) =>
       apiFetch<{ version: { id: string; version: number } }>(
@@ -174,20 +189,6 @@ export function SkillDetailPage() {
   const shownDescription = editedDescription ?? skill.description
   const shownBody = editedBody ?? bodyOf(skillMd.content)
   const canManage = skill.viewer.can_manage
-  const navigate = useNavigate()
-  const [deleteOpen, setDeleteOpen] = useState(false)
-
-  const deleteSkill = useMutation({
-    mutationFn: async () => apiFetch(skillsPath(ref), { method: "DELETE" }),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["skills"] })
-      navigate("/skills")
-    },
-    onError: (err) => {
-      setDeleteOpen(false)
-      setActionError(err instanceof ApiError ? err.message : "Could not delete the skill.")
-    },
-  })
 
   return (
     <div className="space-y-6 p-6">
