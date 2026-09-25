@@ -223,6 +223,20 @@ Numbers/sign-offs pending owner.
 - Manual check for owner: register a global MCP with a deliberately broken credential in Admin → Global services → row must show the failure with the "Bearer " hint and keep the service; fix the credential via service detail, hit Test/Sync, then approve the pending tools in the review queue.
 - Open question (non-blocking): template-tier services store no org credential, so the live test on the admin row reports "no connected credential is stored for this service" until a user connects. Registration-side live testing for templates may need a per-test ephemeral handshake; left as-is (matches "each user connects their own account" design).
 
+## 2026-09-25 — fix/dashboard: REST registration enabled in the personal service wizard
+
+- The Register wizard (`/services/new`) still showed the REST type card as disabled with copy claiming "Personal REST APIs are not yet supported" — stale since Phase 3 (backend `POST /api/services`, `/api/services/test` and the REST executor all take personal REST services). The wizard now teaches the full REST flow:
+  - REST card selectable; step flow unchanged (Type → Details → Auth → Test → Tools → Limits → Save).
+  - Details (rest): URL + optional **OpenAPI spec URL** (defaults to the service URL server-side when blank).
+  - Auth (rest): none / static-header (header name + value) / bearer (token) / api-key (name + location header|query + value) / basic (username + password) — mirrors the admin form's patterns; client-side validation for key name / username.
+  - Test (rest): `POST /api/services/test` with kind=rest + same draft body → shows ok/message and discovered operations with truncated descriptions.
+  - Tools: operations listed as checkboxes (all pre-checked after a run); unchecking any makes the save payload send `tools: [<selected>]`; if all stay checked the field is omitted to import everything.
+  - Save: payload now includes `kind`, `spec_url`, `api_key_name`/`api_key_in`, `username`, optional `tools`; Save review shows the kind. MCP path behaviour unchanged.
+- Tests: new `web/src/pages/RegisterServicePage.test.tsx` (5) — REST card selectable + spec field renders, same step flow walks through, test renders truncated operations + filters checkboxes, save payload carries kind/spec_url/selected ops, tools omitted when all selected.
+- Docs checked: `register-a-service.md` / `onboarding.md` never repeated the false claim — no changes needed.
+- Checks: web `npx tsc --noEmit`, `npm test` (19), `npm run build` all green. No backend changes.
+- Gap noted (backend, not wizard): the REST test step honors only `spec_url`-based OpenAPI discovery; api-key-in-query auth for REST is supported at test/registration, but manual per-operation REST overrides (method/path editing per tool in the wizard) is not offered — tools must come from the spec or later via `POST /api/services/{owner}/{slug}/tools`.
+
 ## Open questions
 
 Resolved by coordinator (2026-09-24, Phase 2):
