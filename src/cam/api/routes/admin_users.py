@@ -35,7 +35,7 @@ AdminDep = Annotated[SessionIdentity, Depends(require_admin)]
 class AdminUserCreateBody(BaseModel):
     email: str = Field(min_length=3, max_length=320)
     password: str = Field(min_length=8, max_length=256)
-    role: str = Field(pattern="^(admin|user)$")
+    role: str | None = Field(default=None, pattern="^(admin|user)$")
     kind: str = Field(default="person", pattern="^(person|team)$")
     display_name: str | None = Field(default=None, min_length=1, max_length=200)
 
@@ -69,7 +69,7 @@ async def create_user_route(
                 db,
                 email=body.email,
                 password=body.password,
-                role=body.role,  # type: ignore[arg-type]
+                role=body.role or "user",  # type: ignore[arg-type]
                 kind=body.kind,  # type: ignore[arg-type]
                 display_name=body.display_name,
             )
