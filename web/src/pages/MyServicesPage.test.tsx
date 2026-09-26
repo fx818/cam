@@ -187,7 +187,7 @@ describe("MyServicesPage", () => {
   it("links personal services to their detail page", async () => {
     renderPage()
     const open = await screen.findAllByRole("link", { name: "Open" })
-    expect(open).toHaveLength(3)
+    expect(open).toHaveLength(4)
     expect(open[0]).toHaveAttribute("href", "/services/global/redash")
   })
 })
