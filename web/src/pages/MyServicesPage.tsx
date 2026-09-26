@@ -22,8 +22,7 @@ function ServiceRow({
   service: DashboardService
   onConnect?: (service: DashboardService) => void
 }) {
-  const detailPath =
-    service.tier === "template" ? null : `/services/${service.id}`
+  const detailPath = `/services/${service.id}`
   return (
     <div className="flex items-center justify-between gap-4 rounded-md border p-3">
       <div className="min-w-0">
