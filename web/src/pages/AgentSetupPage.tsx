@@ -96,7 +96,8 @@ export function AgentSetupPage() {
 
   const tokens = data?.tokens ?? []
   const activeTokens = tokens.filter((t) => t.revoked_at === null)
-  const sampleToken = rawToken ?? (activeTokens[0] ? `cam_…${activeTokens[0].token_prefix}` : "cam_<your-token>")
+  const hasRealToken = rawToken !== null
+  const sampleToken = rawToken ?? "cam_<paste-your-fresh-token>"
   const mcpUrl = `${baseUrl || window.location.origin}/mcp`
   const claudeSnippet = `claude mcp add --transport http cam ${mcpUrl} --header "Authorization: Bearer ${sampleToken}"`
   const jsonSnippet = JSON.stringify(
@@ -218,8 +219,17 @@ bearer_token_env_var = "CAM_TOKEN"  # export CAM_TOKEN=<your-token>
         <CardHeader>
           <CardTitle>Connect an agent</CardTitle>
           <CardDescription>
-            Configs use your CAM base URL. Replace the token placeholder with a real token
-            if you have not created one yet.
+            {hasRealToken ? (
+              <>
+                Configs below use the token you just created. Copy them now — the raw token is
+                never shown again.
+              </>
+            ) : (
+              <>
+                Generate a token first: without it, the configs below contain only a placeholder
+                — agents with a placeholder fail with “invalid header value”.
+              </>
+            )}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
