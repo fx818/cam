@@ -28,6 +28,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { ApiError, apiFetch } from "@/lib/api"
+import { useAuth } from "@/lib/auth"
 import type { AuditEntry, AuditListResponse } from "@/lib/types"
 
 interface Filters {
@@ -48,6 +49,14 @@ const emptyFilters: Filters = {
   to: "",
 }
 
+function defaultFilters(): Filters {
+  const today = new Date()
+  const weekAgo = new Date(today)
+  weekAgo.setDate(today.getDate() - 6)
+  const iso = (d: Date): string => d.toISOString().slice(0, 10)
+  return { ...emptyFilters, from: iso(weekAgo), to: iso(today) }
+}
+
 function buildParams(filters: Filters, cursor?: string): string {
   const params = new URLSearchParams()
   params.set("scope", filters.scope)
@@ -62,8 +71,10 @@ function buildParams(filters: Filters, cursor?: string): string {
 }
 
 export function ActivityLogPage() {
-  const [filters, setFilters] = useState<Filters>(emptyFilters)
-  const [applied, setApplied] = useState<Filters>(emptyFilters)
+  const { user } = useAuth()
+  const isAdmin = user?.role === "admin"
+  const [filters, setFilters] = useState<Filters>(defaultFilters)
+  const [applied, setApplied] = useState<Filters>(defaultFilters)
   const [extraPages, setExtraPages] = useState<AuditEntry[][]>([])
   const [nextCursor, setNextCursor] = useState<string | null>(null)
   const [selected, setSelected] = useState<AuditEntry | null>(null)
@@ -111,6 +122,7 @@ export function ActivityLogPage() {
         <h1 className="text-2xl font-semibold">Activity log</h1>
         <p className="text-sm text-muted-foreground">
           Your calls and calls made through services you own.
+          {isAdmin ? " Admins: organisation-wide activity lives in Admin → Org overview." : ""}
         </p>
       </div>
 
