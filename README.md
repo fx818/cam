@@ -18,3 +18,11 @@ uv run pyright           # type check
 ```
 
 Health endpoint: `GET http://localhost:8000/api/health`.
+
+Web frontend (React) lives in `web/` — run it separately:
+
+```bash
+cd web
+npm install
+npm run dev
+```

@@ -381,6 +381,8 @@ interface RegisterDraft {
   description: string
   authType: string
   headerName: string
+  apiKeyName: string
+  apiKeyIn: "header" | "query"
   credential: string
   username: string
   timeoutMs: string
@@ -398,6 +400,8 @@ const initialDraft: RegisterDraft = {
   description: "",
   authType: "none",
   headerName: "X-Api-Key",
+  apiKeyName: "X-Api-Key",
+  apiKeyIn: "header",
   credential: "",
   username: "",
   timeoutMs: "60000",
@@ -413,6 +417,13 @@ export function RegisterGlobalServiceForm() {
   const set = <K extends keyof RegisterDraft>(key: K, value: RegisterDraft[K]) =>
     setDraft((prev) => ({ ...prev, [key]: value }))
 
+  const authCredentialHint =
+    draft.authType === "static-header"
+      ? "Full header value, exactly as the upstream expects it — include any prefix such as `Bearer ` if the upstream sends one."
+      : draft.authType === "api-key"
+        ? `The key is sent as "${draft.apiKeyName}" in the ${draft.apiKeyIn === "query" ? "URL query string" : "HTTP header"}.`
+        : null
+
   const requestBody = () => ({
     tier: draft.tier,
     slug: draft.slug,
@@ -423,6 +434,8 @@ export function RegisterGlobalServiceForm() {
     spec_url: draft.kind === "rest" && draft.specUrl ? draft.specUrl : null,
     auth_type: draft.authType,
     header_name: draft.authType === "static-header" ? draft.headerName : null,
+    api_key_name: draft.authType === "api-key" ? draft.apiKeyName : null,
+    api_key_in: draft.authType === "api-key" ? draft.apiKeyIn : null,
     credential: draft.authType === "none" ? null : draft.credential,
     username: draft.authType === "basic" ? draft.username : null,
     description: draft.description,
@@ -437,6 +450,8 @@ export function RegisterGlobalServiceForm() {
     if (!/^https?:\/\//.test(draft.url)) return setMessage("URL must start with http(s)://.")
     if (draft.authType !== "none" && !draft.credential)
       return setMessage("A credential is required for this auth type.")
+    if (draft.authType === "api-key" && !draft.apiKeyName.trim())
+      return setMessage("An API key name is required for api-key auth.")
     setSaving(true)
     setMessage(null)
     apiFetch<{ service: ServiceDetail; test?: AdminTestResult }>("/api/admin/services", {
@@ -575,6 +590,33 @@ export function RegisterGlobalServiceForm() {
             />
           </div>
         )}
+        {draft.authType === "api-key" && (
+          <>
+            <div className="space-y-1">
+              <Label htmlFor="admin-svc-apikey-name">API key name</Label>
+              <Input
+                id="admin-svc-apikey-name"
+                value={draft.apiKeyName}
+                onChange={(event) => set("apiKeyName", event.target.value)}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="admin-svc-apikey-in">API key in</Label>
+              <Select
+                value={draft.apiKeyIn}
+                onValueChange={(value) => set("apiKeyIn", value as "header" | "query")}
+              >
+                <SelectTrigger id="admin-svc-apikey-in">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="header">header</SelectItem>
+                  <SelectItem value="query">query</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </>
+        )}
         {draft.authType === "basic" && (
           <div className="space-y-1">
             <Label htmlFor="admin-svc-username">Username</Label>
@@ -596,14 +638,9 @@ export function RegisterGlobalServiceForm() {
               value={draft.credential}
               onChange={(event) => set("credential", event.target.value)}
             />
-            {draft.authType !== "basic" &&
-              draft.authType !== "bearer" &&
-              draft.authType !== "oauth" && (
-                <p className="text-xs text-muted-foreground">
-                  Full header value, exactly as the upstream expects it — include any prefix
-                  such as `Bearer ` if the upstream sends one.
-                </p>
-              )}
+            {authCredentialHint && (
+              <p className="text-xs text-muted-foreground">{authCredentialHint}</p>
+            )}
             {draft.authType === "bearer" && (
               <p className="text-xs text-muted-foreground">
                 The value is sent as `Authorization: Bearer &lt;value&gt;`.
