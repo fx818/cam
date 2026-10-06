@@ -154,7 +154,7 @@ async def test_describe_unknown_tool_not_found(mcp_a: McpConnection, gateway: Ga
     )
     error = error_payload(result)
     assert error["code"] == "NOT_FOUND"
-    assert error["message"] == "Tool not found or not available."
+    assert error["message"].startswith("Tool not found or not available.")
     assert error["service"] is None
     assert error["retryable"] is False
 
@@ -165,7 +165,7 @@ async def test_describe_restricted_service_not_found_for_user_a(
     result = await mcp_a.call({"action": "describe", "id": f"{gateway.data.service_b_ref}/echo"})
     error = error_payload(result)
     assert error["code"] == "NOT_FOUND"
-    assert error["message"] == "Tool not found or not available."
+    assert error["message"].startswith("Tool not found or not available.")
 
 
 async def test_describe_disabled_tool_not_found(mcp_a: McpConnection, gateway: GatewayEnv) -> None:

@@ -14,11 +14,22 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import socket
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
 MAX_REDIRECT_HOPS = 3
+
+
+def url_with_credential_query(url: str, query: Mapping[str, str]) -> str:
+    """Append credential query parameters to a URL, sharing the invoke path's
+    behaviour (`_dispatch_mcp`). The URL policy validates scheme, host and the
+    resolved address, not the query string."""
+    if not query:
+        return url
+    joiner = "&" if "?" in url else "?"
+    return f"{url}{joiner}{urlencode(query)}"
+
 
 _ALLOWED_SCHEMES = frozenset({"http", "https"})
 _BLOCKED_HOSTNAMES = frozenset({"localhost", "metadata.google.internal"})
@@ -51,6 +62,10 @@ class UrlPolicy:
 
     restricted: bool = False
     allowlist: tuple[str, ...] = ()
+
+    def admittable_url(self, url: str, query: Mapping[str, str] | None = None) -> str:
+        """Full-admission URL, optionally with credential query parameters."""
+        return url_with_credential_query(url, query or {})
 
 
 @dataclass(frozen=True, slots=True)

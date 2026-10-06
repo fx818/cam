@@ -187,7 +187,7 @@ async def test_phase2_done_when(mock_mcp: MockMCPHandle) -> None:
                 )
             )
             assert revoked_invoke["code"] == "NOT_FOUND"
-            assert revoked_invoke["message"] == "Tool not found or not available."
+            assert revoked_invoke["message"].startswith("Tool not found or not available.")
             assert ref not in await _service_ids(mcp_b)
             revoked_describe = error_payload(
                 await mcp_b.call({"action": "describe", "id": tool_id})

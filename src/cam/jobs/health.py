@@ -23,7 +23,7 @@ from cam.connections.url_policy import load_url_policy
 from cam.db.models import Connection, Service
 from cam.upstream import ConnectionTarget
 from cam.upstream.errors import map_exception
-from cam.upstream.url import UrlPolicy
+from cam.upstream.url import UrlPolicy, url_with_credential_query
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +105,7 @@ async def collect_targets(
                 ProbeTarget(
                     service_id=service.id,
                     connection_id=connection.id,
-                    url=service.url,
+                    url=url_with_credential_query(service.url, dict(material.query)),
                     transport=service.transport or "streamable-http",
                     headers=dict(material.headers),
                     url_policy=url_policy,

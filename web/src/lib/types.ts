@@ -79,6 +79,9 @@ export interface ToolRow {
   upstream_name: string
   description: string | null
   description_override: string | null
+  usage_note: string | null
+  example_invocation: Record<string, unknown> | null
+  input_schema: Record<string, unknown> | null
   tags: string[] | null
   enabled: boolean
   status: string
@@ -191,6 +194,13 @@ export interface AllowlistResponse {
   entries: AllowlistEntry[]
 }
 
+export interface AttentionItem {
+  kind: string
+  label: string
+  detail: string
+  href: string
+}
+
 export interface OverviewResponse {
   users: {
     total: number
@@ -204,4 +214,5 @@ export interface OverviewResponse {
     by_health: Record<string, number>
   }
   recent_audit: AuditEntry[]
+  attention?: AttentionItem[]
 }

@@ -185,6 +185,8 @@ class Tool(Base):
     upstream_name: Mapped[str] = mapped_column(String, nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
     description_override: Mapped[str | None] = mapped_column(Text)
+    usage_note: Mapped[str | None] = mapped_column(Text)
+    example_invocation: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     tags: Mapped[list[str] | None] = mapped_column(JSONB)
     input_schema: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     rest_binding: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
@@ -234,6 +236,7 @@ class Connection(Base):
         Integer, nullable=False, default=1, server_default=text("1")
     )
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_rotated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     status: Mapped[str] = mapped_column(
         String, nullable=False, default="connected", server_default=text("'connected'")
     )
@@ -295,6 +298,8 @@ class AuditLog(Base):
         Index("ix_audit_logs_org_id_owner_user_id_ts", "org_id", "owner_user_id", "ts"),
         Index("ix_audit_logs_org_id_service_id_ts", "org_id", "service_id", "ts"),
         Index("ix_audit_logs_ts", "ts"),
+        Index("ix_audit_logs_org_id_token_id_ts", "org_id", "token_id", "ts"),
+        Index("ix_audit_logs_org_id_agent_name_ts", "org_id", "agent_name", "ts"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False, default=uuid.uuid4)

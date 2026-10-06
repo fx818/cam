@@ -13,7 +13,6 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Any, cast
-from urllib.parse import urlencode
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -55,7 +54,7 @@ from cam.upstream.errors import UpstreamError
 from cam.upstream.pool import SessionPool
 from cam.upstream.rest import execute_rest
 from cam.upstream.types import ConnectionTarget, ContentBlock, TextBlock, ToolCallOutcome
-from cam.upstream.url import UrlPolicy
+from cam.upstream.url import UrlPolicy, url_with_credential_query
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +106,33 @@ def payload_result(payload: dict[str, Any], audit_ref: AuditRef | None = None) -
         is_error=False,
         audit_ref=audit_ref,
     )
+
+
+async def closest_tool_hint(
+    deps: GatewayDeps, identity: AuthenticatedIdentity, raw_id: str
+) -> str | None:
+    """Suggest the closest tool ID the caller can actually reach.
+
+    Candidates come strictly from the caller's access-filtered list, so the
+    hint never reveals services the caller cannot see (NOT_FOUND stays opaque).
+    """
+    import difflib
+
+    try:
+        async with deps.session_factory() as session:
+            summaries = await list_services(session, identity, include_templates=True)
+            candidates: list[str] = []
+            for summary in summaries:
+                resolved_service, tools = await list_tools(session, identity, summary.id)
+                candidates.extend(
+                    tool_ref(resolved_service.service, tool, resolved_service.owner_handle)
+                    for tool in tools
+                )
+    except Exception:
+        logger.debug("could not build NOT_FOUND suggestion", exc_info=True)
+        return None
+    matches = difflib.get_close_matches(raw_id, candidates, n=1, cutoff=0.4)
+    return matches[0] if matches else None
 
 
 def _require_str(value: Any, field_name: str) -> str:
@@ -174,14 +200,20 @@ async def _describe(deps: GatewayDeps, identity: AuthenticatedIdentity, tool_id:
     raw_id = _require_str(tool_id, "id")
     async with deps.session_factory() as session:
         resolved = await resolve_tool(session, identity, raw_id)
-    payload = {
+    tool = resolved.tool
+    payload: dict[str, Any] = {
         "id": resolved.id,
-        "description": _tool_description(resolved.tool),
-        "input_schema": resolved.tool.input_schema or {},
+        "description": _tool_description(tool),
+        "input_schema": tool.input_schema or {},
     }
+    if tool.usage_note:
+        payload["usage_note"] = tool.usage_note
+    example = tool.example_invocation if isinstance(tool.example_invocation, dict) else None
+    if example:
+        payload["example"] = example
     return payload_result(
         payload,
-        AuditRef(service_id=resolved.service.id, tool_name=resolved.tool.name),
+        AuditRef(service_id=resolved.service.id, tool_name=tool.name),
     )
 
 
@@ -355,10 +387,7 @@ async def _dispatch_mcp(
     transport = (
         service.transport if service.transport in ("streamable-http", "sse") else "streamable-http"
     )
-    url = service.url
-    if credential_query:
-        joiner = "&" if "?" in url else "?"
-        url = f"{url}{joiner}{urlencode(credential_query)}"
+    url = url_with_credential_query(service.url, credential_query)
     target = ConnectionTarget(
         service_id=str(service.id),
         connection_id=str(connection_id),
@@ -393,7 +422,8 @@ async def _dispatch(
     if not isinstance(action, str):
         raise invalid_args("action", "must be a string")
     if action not in CAM_ACTIONS:
-        raise invalid_args("action", f"unknown action {action!r}")
+        valid = ", ".join(sorted(CAM_ACTIONS))
+        raise invalid_args("action", f"unknown action {action!r}; valid: {valid}")
     if action == "list_services":
         return await _list_services(deps, identity)
     if action == "list_tools":
@@ -474,6 +504,13 @@ async def handle(
         result = error_result(exc)
     except ServiceNotFound:
         cam_error = not_found()
+        if action in ("invoke", "describe") and isinstance(id, str) and id:
+            suggestion = await closest_tool_hint(deps, identity, id)
+            if suggestion:
+                cam_error = CamError(
+                    CamErrorCode.NOT_FOUND,
+                    f'Tool not found or not available. Closest match: "{suggestion}".',
+                )
         result = error_result(cam_error)
     except ServiceDisabled as exc:
         cam_error = service_disabled(str(exc) or None)

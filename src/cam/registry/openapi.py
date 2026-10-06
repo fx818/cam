@@ -19,6 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cam.db.models import Service, Tool
+from cam.registry.examples import sample_invocation
 from cam.upstream.rest import fetch_text
 from cam.upstream.url import UrlPolicy
 
@@ -351,6 +352,7 @@ async def import_openapi_tools(
                 description=operation.description,
                 input_schema=operation.input_schema,
                 rest_binding=operation.binding,
+                example_invocation=sample_invocation(operation.input_schema),
                 enabled=True,
                 status="active",
             )
@@ -359,6 +361,8 @@ async def import_openapi_tools(
             row.upstream_name = operation.name
             row.description = operation.description
             row.input_schema = operation.input_schema
+            if row.example_invocation is None:
+                row.example_invocation = sample_invocation(operation.input_schema)
             row.rest_binding = operation.binding
         tools.append(row)
     await session.flush()

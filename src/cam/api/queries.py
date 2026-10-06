@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import json
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any, Literal
 
-from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy import String, and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cam.access.resolution import GLOBAL_OWNER, ServiceNotFound, has_access, list_services
@@ -29,7 +30,7 @@ from cam.db.models import (
 )
 
 ServiceGroup = Literal["global", "templates", "mine", "shared"]
-AuditScope = Literal["mine", "my_services", "both"]
+AuditScope = Literal["mine", "my_services", "both", "all"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,7 +43,7 @@ class ServiceContext:
     can_manage: bool
 
 
-def _viewer_identity(identity: SessionIdentity) -> AuthenticatedIdentity:
+def dashboard_viewer_identity(identity: SessionIdentity) -> AuthenticatedIdentity:
     return AuthenticatedIdentity(
         org_id=identity.org_id,
         user=identity.user,
@@ -95,6 +96,9 @@ def connection_public(connection: Connection | None) -> dict[str, Any] | None:
         "id": str(connection.id),
         "status": connection.status,
         "expires_at": connection.expires_at.isoformat() if connection.expires_at else None,
+        "last_rotated_at": (
+            connection.last_rotated_at.isoformat() if connection.last_rotated_at else None
+        ),
         "created_at": connection.created_at.isoformat() if connection.created_at else None,
     }
 
@@ -130,6 +134,9 @@ def tool_public(tool: Tool) -> dict[str, Any]:
         "upstream_name": tool.upstream_name,
         "description": tool.description,
         "description_override": tool.description_override,
+        "usage_note": tool.usage_note,
+        "example_invocation": tool.example_invocation,
+        "input_schema": tool.input_schema,
         "tags": tool.tags,
         "enabled": tool.enabled,
         "status": tool.status,
@@ -176,7 +183,7 @@ async def _connection_map(
 async def list_dashboard_services(
     session: AsyncSession, identity: SessionIdentity
 ) -> list[dict[str, Any]]:
-    viewer = _viewer_identity(identity)
+    viewer = dashboard_viewer_identity(identity)
     connections = await _connection_map(session, identity)
     entries: list[dict[str, Any]] = []
     for summary in await list_services(session, viewer):
@@ -292,7 +299,7 @@ async def lookup_service_context(
     ref = f"{owner_part}/{resolved_slug}"
     if service is None or service.status == "deleted":
         raise ServiceNotFound(ref)
-    if not await has_access(session, _viewer_identity(identity), service):
+    if not await has_access(session, dashboard_viewer_identity(identity), service):
         raise ServiceNotFound(ref)
     resolved_handle = (
         owner_handle if owner_handle is not None else await _owner_handle(session, service)
@@ -387,7 +394,7 @@ async def get_tool_context(
         raise ServiceNotFound(str(tool_id))
     owner_handle = await _owner_handle(session, service)
     ref = dashboard_ref(service, owner_handle)
-    if not await has_access(session, _viewer_identity(identity), service):
+    if not await has_access(session, dashboard_viewer_identity(identity), service):
         raise ServiceNotFound(ref)
     is_owner = service.owner_user_id == identity.user.id
     is_admin = identity.user.role == "admin"
@@ -407,6 +414,12 @@ def apply_tool_patch(tool: Tool, updates: dict[str, Any]) -> Tool:
     if "description_override" in updates:
         raw = updates["description_override"]
         tool.description_override = None if raw is None or raw == "" else str(raw)
+    if "usage_note" in updates:
+        raw = updates["usage_note"]
+        tool.usage_note = None if raw is None or raw == "" else str(raw)
+    if "example_invocation" in updates:
+        raw = updates["example_invocation"]
+        tool.example_invocation = None if raw is None else dict(raw)
     if "tags" in updates:
         raw_tags = updates["tags"]
         tool.tags = None if raw_tags is None else [str(tag) for tag in raw_tags]
@@ -520,6 +533,21 @@ class AuditFilters:
     status: str | None
     date_from: date | None
     date_to: date | None
+    agent_name: str | None = None
+    token_id: uuid.UUID | None = None
+    args_query: str | None = None
+
+
+def apply_audit_filters(stmt: Any, filters: AuditFilters) -> Any:
+    """Admin/forensics filters: exact token, agent name and args text search."""
+    if filters.token_id is not None:
+        stmt = stmt.where(AuditLog.token_id == filters.token_id)
+    if filters.agent_name:
+        stmt = stmt.where(AuditLog.agent_name == filters.agent_name)
+    if filters.args_query:
+        needle = str(filters.args_query)
+        stmt = stmt.where(AuditLog.args.cast(String).ilike(f"%{needle}%"))
+    return stmt
 
 
 async def _resolve_audit_service(
@@ -556,7 +584,7 @@ async def _resolve_audit_service(
 
 
 async def _hydrate_audit_entries(
-    session: AsyncSession, rows: list[AuditLog]
+    session: AsyncSession, rows: list[AuditLog], *, include_args: bool = False
 ) -> list[dict[str, Any]]:
     token_ids = {row.token_id for row in rows if row.token_id is not None}
     user_ids = {row.user_id for row in rows if row.user_id is not None}
@@ -606,25 +634,26 @@ async def _hydrate_audit_entries(
                 service_ref = None
         actor = users.get(row.user_id) if row.user_id else None
         token = tokens.get(row.token_id) if row.token_id else None
-        entries.append(
-            {
-                "id": str(row.id),
-                "ts": row.ts.isoformat() if row.ts else None,
-                "action": row.action,
-                "agent_name": row.agent_name,
-                "agent_version": row.agent_version,
-                "tool_name": row.tool_name,
-                "status": row.status,
-                "error_code": row.error_code,
-                "error_message": row.error_message,
-                "latency_ms": row.latency_ms,
-                "response_bytes": row.response_bytes,
-                "truncated": row.truncated,
-                "service_ref": service_ref,
-                "actor_email": actor.email if actor else None,
-                "token_label": token.label if token else None,
-            }
-        )
+        entry_dict: dict[str, Any] = {
+            "id": str(row.id),
+            "ts": row.ts.isoformat() if row.ts else None,
+            "action": row.action,
+            "agent_name": row.agent_name,
+            "agent_version": row.agent_version,
+            "tool_name": row.tool_name,
+            "status": row.status,
+            "error_code": row.error_code,
+            "error_message": row.error_message,
+            "latency_ms": row.latency_ms,
+            "response_bytes": row.response_bytes,
+            "truncated": row.truncated,
+            "service_ref": service_ref,
+            "actor_email": actor.email if actor else None,
+            "token_label": token.label if token else None,
+        }
+        if include_args:
+            entry_dict["args"] = row.args
+        entries.append(entry_dict)
     return entries
 
 
@@ -637,7 +666,9 @@ async def list_audit_entries(
     cursor: str | None,
 ) -> tuple[list[dict[str, Any]], str | None]:
     stmt = select(AuditLog).where(AuditLog.org_id == identity.org_id)
-    if filters.scope == "mine":
+    if filters.scope == "all":
+        pass  # admin forensics: org-wide
+    elif filters.scope == "mine":
         stmt = stmt.where(AuditLog.user_id == identity.user.id)
     elif filters.scope == "my_services":
         stmt = stmt.where(AuditLog.owner_user_id == identity.user.id)
@@ -663,6 +694,7 @@ async def list_audit_entries(
     if filters.date_to:
         end = datetime.combine(filters.date_to + timedelta(days=1), time.min, tzinfo=UTC)
         stmt = stmt.where(AuditLog.ts < end)
+    stmt = apply_audit_filters(stmt, filters)
     if cursor:
         parts = decode_cursor(cursor, count=2)
         assert parts is not None
@@ -683,6 +715,88 @@ async def list_audit_entries(
         assert last.ts is not None
         next_cursor = encode_cursor(last.ts.isoformat(), str(last.id))
     return await _hydrate_audit_entries(session, rows), next_cursor
+
+
+def audit_row_for_export(entry: dict[str, Any]) -> dict[str, Any]:
+    """Flatten one hydrated audit entry for CSV export (full args included)."""
+    return {
+        "ts": entry.get("ts"),
+        "action": entry.get("action"),
+        "status": entry.get("status"),
+        "error_code": entry.get("error_code"),
+        "actor_email": entry.get("actor_email"),
+        "token_label": entry.get("token_label"),
+        "agent_name": entry.get("agent_name"),
+        "agent_version": entry.get("agent_version"),
+        "service_ref": entry.get("service_ref"),
+        "tool_name": entry.get("tool_name"),
+        "latency_ms": entry.get("latency_ms"),
+        "response_bytes": entry.get("response_bytes"),
+        "truncated": entry.get("truncated"),
+        "args": entry.get("args"),
+    }
+
+
+_EXPORT_COLUMNS = (
+    "ts",
+    "action",
+    "status",
+    "error_code",
+    "actor_email",
+    "token_label",
+    "agent_name",
+    "agent_version",
+    "service_ref",
+    "tool_name",
+    "latency_ms",
+    "response_bytes",
+    "truncated",
+    "args",
+)
+
+
+def build_audit_csv(entries: list[dict[str, Any]]) -> tuple[str, str]:
+    """RFC-4180 CSV of flattened audit entries; returns (csv_text, filename)."""
+    import csv
+    import io
+
+    buffer = io.StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=_EXPORT_COLUMNS, quoting=csv.QUOTE_ALL)
+    writer.writeheader()
+    for entry in entries:
+        row = audit_row_for_export(entry)
+        row["args"] = json.dumps(row["args"], sort_keys=True) if row["args"] is not None else ""
+        writer.writerow({column: row.get(column) or "" for column in _EXPORT_COLUMNS})
+    stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+    return buffer.getvalue(), f"cam-audit-{stamp}.csv"
+
+
+async def admin_forensic_export(
+    session: AsyncSession,
+    identity: SessionIdentity,
+    filters: AuditFilters,
+    *,
+    max_rows: int = 5000,
+) -> list[dict[str, Any]]:
+    """Org-wide audit read with the forensics filters applied, capped."""
+    stmt = select(AuditLog).where(AuditLog.org_id == identity.org_id)
+    stmt = apply_audit_filters(stmt, filters)
+    if filters.status:
+        stmt = stmt.where(AuditLog.status == filters.status)
+    if filters.service_ref:
+        service_id = await _resolve_audit_service(session, identity, filters.service_ref)
+        if service_id is None:
+            return []
+        stmt = stmt.where(AuditLog.service_id == service_id)
+    if filters.date_from:
+        start = datetime.combine(filters.date_from, time.min, tzinfo=UTC)
+        stmt = stmt.where(AuditLog.ts >= start)
+    if filters.date_to:
+        end = datetime.combine(filters.date_to + timedelta(days=1), time.min, tzinfo=UTC)
+        stmt = stmt.where(AuditLog.ts < end)
+    stmt = stmt.order_by(AuditLog.ts.desc(), AuditLog.id.desc()).limit(max_rows)
+    rows = list((await session.execute(stmt)).scalars().all())
+    return await _hydrate_audit_entries(session, rows, include_args=True)
 
 
 async def get_audit_entry(

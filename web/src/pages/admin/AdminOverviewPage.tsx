@@ -20,6 +20,50 @@ import {
 import { ApiError, apiFetch } from "@/lib/api"
 import type { OverviewResponse } from "@/lib/types"
 
+const KIND_LABELS: Record<string, string> = {
+  review_queue: "Review queue",
+  reconnect: "Reconnect",
+  failing_service: "Failing service",
+  stale_credential: "Credential hygiene",
+  activation: "Activation",
+}
+
+function NeedsAttention({ items }: { items: NonNullable<OverviewResponse["attention"]> }) {
+  if (items.length === 0) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Needs attention</CardTitle>
+          <CardDescription>Everything is in order right now.</CardDescription>
+        </CardHeader>
+      </Card>
+    )
+  }
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Needs attention</CardTitle>
+        <CardDescription>{items.length} item(s) need a human today.</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <ul className="space-y-2">
+          {items.map((item, index) => (
+            <li key={`${item.kind}-${index}`} className="text-sm">
+              <span className="mr-2 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase text-muted-foreground">
+                {KIND_LABELS[item.kind] ?? item.kind}
+              </span>
+              <Link to={item.href} className="hover:underline">
+                {item.label}
+              </Link>
+              <span className="block text-xs text-muted-foreground">{item.detail}</span>
+            </li>
+          ))}
+        </ul>
+      </CardContent>
+    </Card>
+  )
+}
+
 function StatCard({
   title,
   value,
@@ -100,6 +144,8 @@ export function AdminOverviewPage() {
               } unknown`}
             />
           </div>
+
+          <NeedsAttention items={data.attention ?? []} />
 
           <Card>
             <CardHeader>

@@ -333,6 +333,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/audit/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Export Audit */
+        get: operations["export_audit_api_audit_export_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/audit/{entry_id}": {
         parameters: {
             query?: never;
@@ -840,6 +857,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/tools/{tool_id}/invoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Admin Invoke Tool */
+        post: operations["admin_invoke_tool_api_admin_tools__tool_id__invoke_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/audit/{entry_id}/explain": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Explain Audit Entry */
+        post: operations["explain_audit_entry_api_admin_audit__entry_id__explain_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -851,7 +902,7 @@ export interface components {
             /** Password */
             password: string;
             /** Role */
-            role: string;
+            role?: string | null;
             /**
              * Kind
              * @default person
@@ -1151,12 +1202,28 @@ export interface components {
             /** Label */
             label: string;
         };
+        /** ToolInvokeBody */
+        ToolInvokeBody: {
+            /**
+             * Args
+             * @default {}
+             */
+            args: {
+                [key: string]: unknown;
+            };
+        };
         /** ToolPatchBody */
         ToolPatchBody: {
             /** Enabled */
             enabled?: boolean | null;
             /** Description Override */
             description_override?: string | null;
+            /** Usage Note */
+            usage_note?: string | null;
+            /** Example Invocation */
+            example_invocation?: {
+                [key: string]: unknown;
+            } | null;
             /** Tags */
             tags?: string[] | null;
         };
@@ -1989,12 +2056,15 @@ export interface operations {
     get_audit_api_audit_get: {
         parameters: {
             query?: {
-                scope?: "mine" | "my_services" | "both";
+                scope?: "mine" | "my_services" | "both" | "all";
                 agent?: string | null;
                 service?: string | null;
                 status?: string | null;
                 from?: string | null;
                 to?: string | null;
+                token_id?: string | null;
+                agent_name?: string | null;
+                q?: string | null;
                 cursor?: string | null;
                 limit?: number | null;
             };
@@ -2013,6 +2083,45 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_audit_api_audit_export_get: {
+        parameters: {
+            query?: {
+                agent?: string | null;
+                service?: string | null;
+                status?: string | null;
+                from?: string | null;
+                to?: string | null;
+                token_id?: string | null;
+                agent_name?: string | null;
+                q?: string | null;
+                limit?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -3469,6 +3578,76 @@ export interface operations {
                 "application/json": components["schemas"]["ApproveBody"];
             };
         };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_invoke_tool_api_admin_tools__tool_id__invoke_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tool_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ToolInvokeBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    explain_audit_entry_api_admin_audit__entry_id__explain_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                entry_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {

@@ -9,6 +9,7 @@ return `{connection}` after upserting the encrypted credential.
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
 from typing import Annotated, Any
 from uuid import UUID
 
@@ -155,6 +156,7 @@ async def _upsert_secret_connection(
         connection.key_version = key_version
         connection.status = "connected"
         connection.expires_at = None
+        connection.last_rotated_at = datetime.now(tz=UTC)
     if service.health == "needs_reconnect":
         service.health = "healthy"
     await session.flush()

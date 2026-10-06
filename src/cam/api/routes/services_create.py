@@ -12,7 +12,6 @@ from __future__ import annotations
 import base64
 import uuid
 from typing import Annotated, Any, Literal
-from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
@@ -30,6 +29,7 @@ from cam.registry.rest_tools import RestToolError, define_rest_tool
 from cam.registry.services import ServiceAlreadyExists, ServiceError, register_service
 from cam.upstream import ConnectionTarget, UpstreamSession
 from cam.upstream.errors import UpstreamError
+from cam.upstream.url import url_with_credential_query
 
 router = APIRouter(prefix="/api", tags=["services-create"])
 
@@ -163,10 +163,7 @@ async def _test_mcp(
     session_factory = request.app.state.session_factory
     async with session_factory() as db:
         policy = await load_url_policy(db, org_id=identity.org_id, restricted=True)
-    url = body.url
-    if query:
-        joiner = "&" if "?" in url else "?"
-        url = f"{url}{joiner}{urlencode(query)}"
+    url = url_with_credential_query(body.url, query)
     target = ConnectionTarget(
         service_id=str(uuid.uuid4()),
         connection_id=str(uuid.uuid4()),

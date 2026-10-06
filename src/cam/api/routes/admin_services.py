@@ -56,18 +56,28 @@ class CreateTemplateBody(BaseModel):
     test: bool = True
 
 
-_CREDENTIAL_HINT = "Paste the FULL header value exactly, including prefixes such as 'Bearer '"
+_HEADER_CREDENTIAL_HINT = (
+    "Paste the FULL header value exactly, including prefixes such as 'Bearer '"
+)
+_API_KEY_HINT = (
+    "Check that the API key name and where it is sent (header or query) match "
+    "what the upstream expects."
+)
 
 
-def _test_hint(error: str | None, auth_type: str) -> str | None:
+def _test_hint(error: str | None, auth_type: str, api_key_in: str | None) -> str | None:
     if error is None or "UPSTREAM_AUTH" not in error:
         return None
-    if auth_type in ("static-header", "api-key"):
-        return _CREDENTIAL_HINT
+    if auth_type == "static-header":
+        return _HEADER_CREDENTIAL_HINT
+    if auth_type == "api-key":
+        return _API_KEY_HINT
     return None
 
 
-async def _run_admin_test(session_factory: Any, service_id: Any, auth_type: str) -> dict[str, Any]:
+async def _run_admin_test(
+    session_factory: Any, service_id: Any, auth_type: str, api_key_in: str | None = None
+) -> dict[str, Any]:
     from cam.registry.resync import resync_service_id
 
     outcome = await resync_service_id(session_factory, service_id, skip_if_running=True)
@@ -94,7 +104,7 @@ async def _run_admin_test(session_factory: Any, service_id: Any, auth_type: str)
         "removed": len(outcome.removed),
         "status": outcome.status,
         "error": error,
-        "hint": _test_hint(error, auth_type),
+        "hint": _test_hint(error, auth_type, api_key_in),
     }
 
 
@@ -134,7 +144,9 @@ async def create_org_service(
 
         payload: dict[str, Any] = {"service": service_public(service, None)}
         if body.test:
-            payload["test"] = await _run_admin_test(session_factory, service.id, body.auth_type)
+            payload["test"] = await _run_admin_test(
+                session_factory, service.id, body.auth_type, body.api_key_in
+            )
         return payload
 
 
@@ -151,8 +163,11 @@ async def resync_admin_service(
             raise _visibility_problem(exc) from None
         service_id = service.id
         auth_type = service.auth_type
+        api_key_in = (
+            str(service.auth_config.get("api_key_in") or "") if auth_type == "api-key" else None
+        )
         ref = service_ref(service, None)
-    result = await _run_admin_test(session_factory, service_id, auth_type)
+    result = await _run_admin_test(session_factory, service_id, auth_type, api_key_in)
     return {"service": ref, "test": result}
 
 

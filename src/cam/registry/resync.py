@@ -25,11 +25,12 @@ from cam.access.credentials import CredentialError, CredentialExpiredError, reso
 from cam.access.resolution import service_ref
 from cam.connections.url_policy import load_url_policy
 from cam.db.models import Connection, Service, Tool, User
+from cam.registry.examples import sample_invocation
 from cam.upstream import (
     ConnectionTarget,
     UpstreamError,
 )
-from cam.upstream.url import UrlPolicy
+from cam.upstream.url import UrlPolicy, url_with_credential_query
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +96,9 @@ async def _pick_connection(db: AsyncSession, service: Service) -> Connection | N
     return connected[0] if connected else None
 
 
-async def _target(db: AsyncSession, service: Service, connection: Connection) -> ConnectionTarget:
+async def build_connection_target(
+    db: AsyncSession, service: Service, connection: Connection
+) -> ConnectionTarget:
     url_policy = await load_url_policy(
         db, org_id=service.org_id, restricted=service.tier == "personal"
     )
@@ -110,7 +113,10 @@ async def _target(db: AsyncSession, service: Service, connection: Connection) ->
         except CredentialError as exc:
             raise ResyncError(f"The {service.name} credential is unusable: {exc}") from exc
         headers = dict(material.headers)
-    url = service.url
+        query = dict(material.query)
+    else:
+        query = {}
+    url = url_with_credential_query(service.url, query)
     transport: Literal["streamable-http", "sse"] = (
         "streamable-http" if service.transport != "sse" else "sse"
     )
@@ -129,7 +135,7 @@ async def _fetch_mcp_tools(
 ) -> list[UpstreamToolSpec]:
     from cam.upstream.client import UpstreamSession
 
-    target = await _target(db, service, connection)
+    target = await build_connection_target(db, service, connection)
     session = UpstreamSession(target, call_timeout_s=RESYNC_TIMEOUT_S)
     try:
         await session.start()
@@ -232,6 +238,7 @@ async def apply_diff(
                 description=spec.description,
                 input_schema=spec.input_schema,
                 rest_binding=spec.rest_binding,
+                example_invocation=sample_invocation(spec.input_schema),
                 enabled=enabled,
                 status=status,
             )
@@ -259,6 +266,8 @@ async def apply_diff(
             updated.append(name)
         if spec.input_schema and row.input_schema != spec.input_schema:
             row.input_schema = spec.input_schema
+            if row.example_invocation is None:
+                row.example_invocation = sample_invocation(spec.input_schema)
             if name not in updated:
                 updated.append(name)
         if spec.rest_binding is not None and row.rest_binding != spec.rest_binding:

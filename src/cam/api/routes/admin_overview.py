@@ -4,6 +4,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, Request
 
+from cam.api.attention import admin_attention_items
 from cam.api.deps import SessionIdentity, require_admin
 from cam.api.queries import admin_overview_stats, list_org_audit_preview
 
@@ -23,4 +24,5 @@ async def get_overview(
     async with session_factory() as db:
         stats = await admin_overview_stats(db, admin)
         recent_audit = await list_org_audit_preview(db, admin, limit=recent)
-    return {**stats, "recent_audit": recent_audit}
+        attention = await admin_attention_items(db, admin)
+    return {**stats, "recent_audit": recent_audit, "attention": attention}

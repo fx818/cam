@@ -38,6 +38,8 @@ interface Filters {
   service: string
   from: string
   to: string
+  agentName: string
+  argsQuery: string
 }
 
 const emptyFilters: Filters = {
@@ -47,6 +49,8 @@ const emptyFilters: Filters = {
   service: "",
   from: "",
   to: "",
+  agentName: "",
+  argsQuery: "",
 }
 
 function defaultFilters(): Filters {
@@ -57,6 +61,17 @@ function defaultFilters(): Filters {
   return { ...emptyFilters, from: iso(weekAgo), to: iso(today) }
 }
 
+function exportUrl(filters: Filters): string {
+  const params = new URLSearchParams()
+  if (filters.status) params.set("status", filters.status)
+  if (filters.service) params.set("service", filters.service)
+  if (filters.from) params.set("from", filters.from)
+  if (filters.to) params.set("to", filters.to)
+  if (filters.agentName) params.set("agent_name", filters.agentName)
+  if (filters.argsQuery) params.set("q", filters.argsQuery)
+  return params.toString()
+}
+
 function buildParams(filters: Filters, cursor?: string): string {
   const params = new URLSearchParams()
   params.set("scope", filters.scope)
@@ -65,6 +80,8 @@ function buildParams(filters: Filters, cursor?: string): string {
   if (filters.service) params.set("service", filters.service)
   if (filters.from) params.set("from", filters.from)
   if (filters.to) params.set("to", filters.to)
+  if (filters.agentName) params.set("agent_name", filters.agentName)
+  if (filters.argsQuery) params.set("q", filters.argsQuery)
   params.set("limit", "50")
   if (cursor) params.set("cursor", cursor)
   return params.toString()
@@ -78,6 +95,11 @@ export function ActivityLogPage() {
   const [extraPages, setExtraPages] = useState<AuditEntry[][]>([])
   const [nextCursor, setNextCursor] = useState<string | null>(null)
   const [selected, setSelected] = useState<AuditEntry | null>(null)
+  const [explain, setExplain] = useState<
+    { stage: string; result: string; detail: string }[] | null
+  >(null)
+  const [explainError, setExplainError] = useState<string | null>(null)
+  const [explaining, setExplaining] = useState(false)
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["audit", applied],
@@ -106,11 +128,28 @@ export function ActivityLogPage() {
   }
 
   const openDetail = async (entry: AuditEntry) => {
+    setExplain(null)
+    setExplainError(null)
     try {
       const response = await apiFetch<{ entry: AuditEntry }>(`/api/audit/${entry.id}`)
       setSelected(response.entry)
     } catch {
       setSelected(entry)
+    }
+  }
+
+  const runExplain = async (entry: AuditEntry) => {
+    setExplaining(true)
+    setExplainError(null)
+    try {
+      const response = await apiFetch<{
+        explain: { stage: string; result: string; detail: string }[]
+      }>(`/api/admin/audit/${entry.id}/explain`, { method: "POST" })
+      setExplain(response.explain)
+    } catch (err) {
+      setExplainError(err instanceof ApiError ? err.message : "Could not explain entry.")
+    } finally {
+      setExplaining(false)
     }
   }
 
@@ -164,9 +203,17 @@ export function ActivityLogPage() {
         <div className="space-y-1">
           <Label className="text-xs">Agent</Label>
           <Input
-            value={filters.agent}
-            onChange={(event) => setFilters({ ...filters, agent: event.target.value })}
-            placeholder="claude-code"
+            value={filters.agentName}
+            onChange={(event) => setFilters({ ...filters, agentName: event.target.value })}
+            placeholder="Claude Code"
+          />
+        </div>
+        <div className="space-y-1">
+          <Label className="text-xs">Args contain</Label>
+          <Input
+            value={filters.argsQuery}
+            onChange={(event) => setFilters({ ...filters, argsQuery: event.target.value })}
+            placeholder="text anywhere in the logged args"
           />
         </div>
         <div className="space-y-1">
@@ -193,10 +240,19 @@ export function ActivityLogPage() {
             onChange={(event) => setFilters({ ...filters, to: event.target.value })}
           />
         </div>
-        <div className="md:col-span-3 lg:col-span-6">
+        <div className="md:col-span-3 lg:col-span-6 flex items-center gap-2">
           <Button size="sm" onClick={() => { setNextCursor(null); setApplied(filters) }}>
             Apply filters
           </Button>
+          {isAdmin && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => window.open(`/api/audit/export?${exportUrl(applied)}`, "_blank")}
+            >
+              Export CSV
+            </Button>
+          )}
         </div>
       </div>
 
@@ -273,6 +329,38 @@ export function ActivityLogPage() {
               {selected?.ts ? new Date(selected.ts).toLocaleString() : ""}
             </DialogDescription>
           </DialogHeader>
+          {isAdmin && selected?.status === "error" && (
+            <div className="space-y-2">
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={explaining}
+                onClick={() => selected && void runExplain(selected)}
+              >
+                Explain failure
+              </Button>
+              {explainError && <p className="text-sm text-destructive">{explainError}</p>}
+              {explain && (
+                <ul className="space-y-1">
+                  {explain.map((step) => (
+                    <li key={step.stage} className="text-xs">
+                      <span
+                        className={
+                          step.result === "error" || step.result === "invalid"
+                            ? "text-destructive"
+                            : "text-muted-foreground"
+                        }
+                      >
+                        {step.result}
+                      </span>{" "}
+                      <span className="font-medium">{step.stage}</span>
+                      <span className="block text-muted-foreground">{step.detail}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
           {selected && (
             <div className="space-y-3 text-sm">
               <dl className="grid grid-cols-3 gap-2">

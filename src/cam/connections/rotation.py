@@ -9,6 +9,8 @@ the new credential.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cam.db.models import Connection
@@ -31,5 +33,6 @@ async def rotate_connection_secret(
     connection.key_version = key_version
     connection.status = "connected"
     connection.expires_at = None
+    connection.last_rotated_at = datetime.now(tz=UTC)
     await session.flush()
     return connection

@@ -13,6 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cam.db.models import Service, Tool
+from cam.registry.examples import sample_invocation
 from cam.registry.services import ServiceError
 from cam.upstream.rest import HTTP_METHODS, PARAM_LOCATIONS, RestBindingError, build_rest_request
 
@@ -141,6 +142,7 @@ async def define_rest_tool(
             description=resolved_description,
             input_schema=resolved_schema,
             rest_binding=binding,
+            example_invocation=sample_invocation(resolved_schema),
             enabled=True,
             status="active",
         )
@@ -148,6 +150,8 @@ async def define_rest_tool(
     else:
         row.description = resolved_description
         row.input_schema = resolved_schema
+        if row.example_invocation is None:
+            row.example_invocation = sample_invocation(resolved_schema)
         row.rest_binding = binding
         row.status = "active"
     await session.flush()

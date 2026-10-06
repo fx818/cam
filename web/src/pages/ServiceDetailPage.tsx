@@ -69,6 +69,12 @@ function ToolsTab({
   const queryClient = useQueryClient()
   const [editing, setEditing] = useState<ToolRow | null>(null)
   const [description, setDescription] = useState("")
+  const [usageNote, setUsageNote] = useState("")
+  const [example, setExample] = useState("")
+  const [tryArgs, setTryArgs] = useState("")
+  const [tryToolId, setTryToolId] = useState<string | null>(null)
+  const [tryResult, setTryResult] = useState<string | null>(null)
+  const [trying, setTrying] = useState(false)
   const [status, setStatus] = useState<string | null>(null)
 
   const { data, isLoading, error } = useQuery({
@@ -90,6 +96,36 @@ function ToolsTab({
       setStatus(err instanceof ApiError ? err.message : "Could not update tool.")
     },
   })
+
+  const testMutation = useMutation({
+    mutationFn: ({ id, args }: { id: string; args: Record<string, unknown> }) =>
+      apiFetch<{ invoke: { is_error: boolean; text: string } }>(
+        `/api/admin/tools/${id}/invoke`,
+        { method: "POST", body: { args } },
+      ),
+    onError: (err) => {
+      setTryResult(err instanceof ApiError ? err.message : "Could not invoke tool.")
+      setTrying(false)
+    },
+    onSuccess: (res) => {
+      setTrying(false)
+      setTryResult(`${res.invoke.is_error ? "Error" : "OK"}: ${res.invoke.text.slice(0, 4000)}`)
+    },
+  })
+
+  const runTry = () => {
+    if (tryToolId === null) return
+    let args: Record<string, unknown> = {}
+    try {
+      args = tryArgs.trim() ? (JSON.parse(tryArgs) as Record<string, unknown>) : {}
+    } catch {
+      setTryResult("Arguments must be valid JSON.")
+      return
+    }
+    setTrying(true)
+    setTryResult(null)
+    testMutation.mutate({ id: tryToolId, args })
+  }
 
   const resyncMutation = useMutation({
     mutationFn: () =>
@@ -174,18 +210,42 @@ function ToolsTab({
                   />
                 </TableCell>
                 <TableCell className="text-right">
-                  {canManage && (
+                  <span className="inline-flex gap-1">
                     <Button
                       size="sm"
                       variant="ghost"
                       onClick={() => {
-                        setDescription(tool.description_override ?? tool.description ?? "")
-                        setEditing(tool)
+                        setTryToolId(tool.id)
+                        setTryArgs(
+                          tool.example_invocation
+                            ? JSON.stringify(tool.example_invocation, null, 2)
+                            : "",
+                        )
+                        setTryResult(null)
                       }}
+                      title="Run this tool as yourself"
                     >
-                      Edit
+                      Try it
                     </Button>
-                  )}
+                    {canManage && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => {
+                          setDescription(tool.description_override ?? tool.description ?? "")
+                          setUsageNote(tool.usage_note ?? "")
+                          setExample(
+                            tool.example_invocation
+                              ? JSON.stringify(tool.example_invocation, null, 2)
+                              : "",
+                          )
+                          setEditing(tool)
+                        }}
+                      >
+                        Edit
+                      </Button>
+                    )}
+                  </span>
                 </TableCell>
               </TableRow>
             ))}
@@ -198,7 +258,7 @@ function ToolsTab({
           <DialogHeader>
             <DialogTitle>Edit tool · {editing?.name}</DialogTitle>
             <DialogDescription>
-              Override the description agents see for this tool.
+              Override what agents see and how they should call this tool.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-2">
@@ -209,6 +269,30 @@ function ToolsTab({
               value={description}
               onChange={(event) => setDescription(event.target.value)}
             />
+            <Label htmlFor="tool-usage">Usage note (returned to agents in describe)</Label>
+            <Textarea
+              id="tool-usage"
+              rows={3}
+              placeholder="e.g. dates are YYYY-MM-DD IST; use dept_id from user_info"
+              value={usageNote}
+              onChange={(event) => setUsageNote(event.target.value)}
+            />
+            <Label htmlFor="tool-example">Example invocation (JSON args; blank = auto)</Label>
+            <Textarea
+              id="tool-example"
+              rows={4}
+              placeholder='{ "dept_id": 4, "date": "2026-01-01" }'
+              value={example}
+              onChange={(event) => setExample(event.target.value)}
+            />
+            {example.trim() && (() => {
+              try {
+                JSON.parse(example)
+              } catch {
+                return <p className="text-xs text-destructive">Example is not valid JSON.</p>
+              }
+              return null
+            })()}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setEditing(null)}>
@@ -216,15 +300,93 @@ function ToolsTab({
             </Button>
             <Button
               disabled={patchMutation.isPending}
-              onClick={() =>
-                editing &&
+              onClick={() => {
+                if (!editing) return
+                let parsed: Record<string, unknown> | null = null
+                if (example.trim()) {
+                  try {
+                    parsed = JSON.parse(example) as Record<string, unknown>
+                  } catch {
+                    setStatus("Example is not valid JSON.")
+                    return
+                  }
+                }
                 patchMutation.mutate({
                   id: editing.id,
-                  patch: { description_override: description },
+                  patch: {
+                    description_override: description,
+                    usage_note: usageNote,
+                    example_invocation: parsed,
+                  },
                 })
-              }
+              }}
             >
               Save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={tryToolId !== null || trying}
+        onOpenChange={(open) => {
+          if (!open) {
+            setTryResult(null)
+            setTrying(false)
+            setTryToolId(null)
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Try tool</DialogTitle>
+            <DialogDescription>
+              Runs the real pipeline as your account (audited like an agent call).
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label htmlFor="try-args">Arguments (JSON)</Label>
+            <Textarea
+              id="try-args"
+              rows={6}
+              value={tryArgs}
+              onChange={(event) => setTryArgs(event.target.value)}
+            />
+            {tryResult && (
+              <pre className="max-h-64 overflow-auto rounded-md border bg-muted p-2 text-xs">
+                {tryResult}
+              </pre>
+            )}
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setTryResult(null)
+                setTrying(false)
+                setTryToolId(null)
+              }}
+            >
+              Close
+            </Button>
+            <Button
+              disabled={trying || tryToolId === null}
+              onClick={() => {
+                let args: Record<string, unknown> = {}
+                try {
+                  args = tryArgs.trim() ? (JSON.parse(tryArgs) as Record<string, unknown>) : {}
+                } catch {
+                  setTryResult("Arguments must be valid JSON.")
+                  return
+                }
+                if (typeof args !== "object" || Array.isArray(args) || args === null) {
+                  setTryResult("Arguments must be a JSON object.")
+                  return
+                }
+                runTry()
+              }}
+            >
+              Run
             </Button>
           </DialogFooter>
         </DialogContent>

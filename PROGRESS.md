@@ -269,6 +269,13 @@ Numbers/sign-offs pending owner.
 
 ## Open questions
 
+Wave 1 (2026-10-05, roadmap build-out): implemented all `docs/roadmap.md` Wave-1 items — per-tool usage notes + curated/auto sample invocations (`tools.usage_note`, `tools.example_invocation`, migration `a9c4d2e1f7b5`), self-healing errors (`INVALID_ARGS` schema fragment, NOT_FOUND closest-match suggestion strictly from the caller's access-filtered set, unknown-action listing), admin Needs-attention digest (`/api/admin/overview.attention` + Overview pane) incl. credential-hygiene staleness (`connections.last_rotated_at`, `credential_stale_days` setting), credential stamps on connect/rotate, tool "Try it" sandbox (`POST /api/admin/tools/{id}/invoke` via the real pipeline as the admin), "Explain failure" replay (`POST /api/admin/audit/{id}/explain`), audit forensics (token/agent_name/args-text filters, CSV export `/api/audit/export`, added `(org,token,ts)` + `(org,agent,ts)` indexes). Web: tool edit dialog extended, Try-it dialog, attention pane, audit filters/export/failure explain.
+- Checks: ruff + pyright + pytest **569 passed** (was 553); web `tsc --noEmit`, vitest (28), `npm run build` green.
+- Pre-existing failure on stale check-out resolved in-session: re-sync/_target dropped `material.query` for `api_key_in: query` credentials → Windmill UPSTREAM_AUTH; fixed via shared `url_with_credential_query` helper (resync, health probes, personal `POST /api/services/test`).
+- **Manual check for owner (Wave 1):** dashboard → service Tools tab → Edit a tool → set usage note + example; agent `describe` returns `usage_note` + `example`; invoke a bad tool id → NOT_FOUND carries a closest-match hint; admin → Overview shows Needs-attention items (needs_reconnect/stale); Tools tab → "Try it" runs the tool as you; Activity log → open a failed row → "Explain failure" shows stage report; admin scope=All + args filter + Export CSV works.
+
+New (2026-10-05, roadmap): added `docs/roadmap.md` (post-launch feature plan from brainstorm). Owner sign-off needed: (1) shared/global skill approval flow, (2) `dry_run` invoke contract extension, (3) per-token reach scoping ever, (4) SIEM destination + full-args streaming.
+
 Resolved by coordinator (2026-09-24, Phase 2):
 
 - **URL-policy rejection surfaces as `UPSTREAM_UNAVAILABLE`** (not a new code). Spec's error enum is closed; do not add `URL_BLOCKED` without owner approval. Audit message carries the policy detail. Revisit in Phase 7 security review.

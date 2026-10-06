@@ -374,6 +374,10 @@ export function RegisterServicePage() {
                       <SelectItem value="query">query</SelectItem>
                     </SelectContent>
                   </Select>
+                  <p className="text-xs text-muted-foreground">
+                    The credential below is sent as "{draft.apiKeyName}" in the{" "}
+                    {draft.apiKeyIn === "query" ? "URL query string" : "HTTP header"}.
+                  </p>
                 </div>
               </>
             )}

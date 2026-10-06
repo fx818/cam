@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from cam.access.credentials import CredentialError, resolve_credential_headers
 from cam.connections.orgs import encrypt_for_org, ensure_org
 from cam.db.models import Connection, Service
+from cam.upstream.url import url_with_credential_query
 
 
 async def _service(
@@ -120,3 +121,27 @@ async def test_static_header_without_name_raises(db_session: AsyncSession) -> No
     connection = await _connection(db_session, org.id, service, secret="key")
     with pytest.raises(CredentialError, match="header name"):
         await resolve_credential_headers(db_session, service=service, connection=connection)
+
+
+def test_url_with_credential_query_appends_and_merges() -> None:
+    base = "https://windmill.example.com/api/mcp/w/production/mcp"
+    assert url_with_credential_query(base, {}) == base
+    assert url_with_credential_query(base, {"token": "t0k"}) == f"{base}?token=t0k"
+    existing = f"{base}?other=1"
+    assert url_with_credential_query(existing, {"token": "t0k"}) == f"{existing}&token=t0k"
+
+
+async def test_resync_target_includes_query_credential(db_session: AsyncSession) -> None:
+    org = await ensure_org(db_session)
+    service = await _service(
+        db_session,
+        org.id,
+        auth_type="api-key",
+        auth_config={"api_key_name": "token", "api_key_in": "query"},
+    )
+    connection = await _connection(db_session, org.id, service, secret="tok-123")
+    from cam.registry.resync import build_connection_target
+
+    target = await build_connection_target(db_session, service, connection)
+    assert "token=tok-123" in target.url
+    assert target.headers == {}

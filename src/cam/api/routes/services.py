@@ -41,6 +41,8 @@ class ServicePatchBody(BaseModel):
 class ToolPatchBody(BaseModel):
     enabled: bool | None = None
     description_override: str | None = Field(default=None, max_length=4000)
+    usage_note: str | None = Field(default=None, max_length=2000)
+    example_invocation: dict[str, object] | None = None
     tags: list[str] | None = None
 
 
