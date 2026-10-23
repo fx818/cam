@@ -97,12 +97,92 @@ SCHEDULER_JOB_ERRORS = Counter(
     registry=REGISTRY,
 )
 
+INVOKE_ACTIONS = Counter(
+    "cam_invoke_actions_total",
+    "cam tool actions by action and outcome (ok/error); MCP tool errors "
+    "surface here as HTTP 200 responses, so alert on this, not on HTTP status",
+    ["action", "outcome"],
+    registry=REGISTRY,
+)
+
+INVOKE_ERRORS = Counter(
+    "cam_invoke_errors_total",
+    "Failed cam tool actions by action and bounded error code",
+    ["action", "code"],
+    registry=REGISTRY,
+)
+
+SCHEDULER_JOB_INTERVAL = Gauge(
+    "cam_scheduler_job_interval_seconds",
+    "Configured interval between scheduled runs of a background job "
+    "(lets alerts fire relative to each job's own cadence)",
+    ["job"],
+    registry=REGISTRY,
+)
+
 HEALTH_LABELS = ("healthy", "failing", "needs_reconnect")
+
+# Bounded label domains for the invoke metrics. Anything outside these sets is
+# folded into a fixed catch-all so a caller cannot blow up label cardinality.
+CAM_INVOKE_ACTIONS = frozenset(
+    {
+        "list_services",
+        "list_tools",
+        "describe",
+        "invoke",
+        "list_skills",
+        "load_skill",
+        "read_skill_file",
+    }
+)
+CAM_INVOKE_ERROR_CODES = frozenset(
+    {
+        "NOT_FOUND",
+        "INVALID_ARGS",
+        "CONNECTION_EXPIRED",
+        "OWNER_DEACTIVATED",
+        "SERVICE_DISABLED",
+        "SKILL_UNAVAILABLE",
+        "UPSTREAM_AUTH",
+        "UPSTREAM_ERROR",
+        "UPSTREAM_RATE_LIMITED",
+        "CAM_RATE_LIMITED",
+        "TIMEOUT",
+        "UPSTREAM_UNAVAILABLE",
+        "INTERNAL",
+    }
+)
+OTHER_LABEL = "other"
+UNKNOWN_LABEL = "UNKNOWN"
+UNMATCHED_ROUTE = "<unmatched>"
 
 
 def set_service_health_counts(counts: dict[str, int]) -> None:
+    """Set the health gauge. ``counts`` must count *distinct services* per
+    health value, not probe outcomes, so a service with several connections is
+    counted once."""
     for label in HEALTH_LABELS:
         SERVICES_BY_HEALTH.labels(label).set(max(0, counts.get(label, 0)))
+
+
+def record_invoke_outcome(action: str, *, is_error: bool, error_code: str | None = None) -> None:
+    """Record one cam tool action at the pipeline boundary.
+
+    Called by the invoke pipeline for every action so tool-level failures are
+    observable even though the MCP call itself returns HTTP 200. Labels are
+    bounded: an unknown action collapses to ``other`` and an unknown error code
+    to ``UNKNOWN``.
+    """
+    action_label = action if action in CAM_INVOKE_ACTIONS else OTHER_LABEL
+    outcome = "error" if is_error else "ok"
+    INVOKE_ACTIONS.labels(action_label, outcome).inc()
+    if is_error:
+        code_label = error_code if error_code in CAM_INVOKE_ERROR_CODES else UNKNOWN_LABEL
+        INVOKE_ERRORS.labels(action_label, code_label).inc()
+
+
+def set_scheduler_job_interval(job: str, seconds: float) -> None:
+    SCHEDULER_JOB_INTERVAL.labels(job).set(seconds)
 
 
 def route_template(scope: dict[str, Any]) -> str:
@@ -110,12 +190,15 @@ def route_template(scope: dict[str, Any]) -> str:
     template = getattr(route, "path", None)
     if isinstance(template, str) and template:
         return template
-    return scope.get("path", "unknown")
+    # Unmatched requests (404s, unknown paths) must not become raw metric
+    # labels: that is an unbounded-cardinality label driven by the caller.
+    return UNMATCHED_ROUTE
 
 
 class RequestMetricsMiddleware:
     """Pure-ASGI request counter. Path labels stay cardinality-safe because
-    they use the matched route template (or the raw path when unmatched)."""
+    they use the matched route template, or a single fixed `<unmatched>`
+    label when no route matched (never the raw request path)."""
 
     def __init__(self, app: Any) -> None:
         self._app = app

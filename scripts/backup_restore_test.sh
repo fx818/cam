@@ -4,19 +4,23 @@ set -eu
 CONTAINER="${PG_CONTAINER:-cam-db-1}"
 DB="cam-backup-restore-test-$$"
 DUMP="./cam-restore-test-$$"
-PGPASSWORD="${PGPASSWORD:-cam}"
-PGUSER="${PGUSER:-cam}"
-PGHOST="${PGHOST:-localhost}"
-PGPORT="${PGPORT:-5432}"
-export PGPASSWORD PGUSER PGHOST PGPORT
+export PGHOST="${PGHOST:-localhost}"
+export PGPORT="${PGPORT:-5432}"
+export PGUSER="${PGUSER:-cam}"
+export PGPASSWORD="${PGPASSWORD:-cam}"
+
+# Both the docker (compose Postgres) and the direct local-psql paths are
+# supported; every helper below branches the same way (R31: the non-docker
+# branch used to ignore its target database).
+have_container() { docker inspect "$CONTAINER" >/dev/null 2>&1; }
 
 psql_run() {
-  target="$1"
+  target="${1:-postgres}"
   sql="$2"
-  if docker inspect "$CONTAINER" >/dev/null 2>&1; then
-    printf '%s' "$sql" | docker exec -i -e PGPASSWORD="$PGPASSWORD" "$CONTAINER" psql -At -U cam -d "$target"
+  if have_container; then
+    printf '%s' "$sql" | docker exec -i -e PGPASSWORD "$CONTAINER" psql -At -U "$PGUSER" -d "$target"
   else
-    printf '%s' "$sql" | psql -At
+    printf '%s' "$sql" | psql -At -U "$PGUSER" -d "$target"
   fi
 }
 
@@ -29,19 +33,28 @@ drop_test_db() {
 }
 
 dump_db() {
-  docker exec -e PGPASSWORD="$PGPASSWORD" "$CONTAINER" rm -rf /tmp/restore-test.dump
-  docker exec -e PGPASSWORD="$PGPASSWORD" "$CONTAINER" \
-    pg_dump -U cam -Fd --no-owner --no-privileges -f /tmp/restore-test.dump "$DB"
-  docker cp "$CONTAINER:/tmp/restore-test.dump" "$DUMP"
-  docker exec "$CONTAINER" rm -rf /tmp/restore-test.dump
+  if have_container; then
+    docker exec -e PGPASSWORD "$CONTAINER" rm -rf /tmp/restore-test.dump
+    docker exec -e PGPASSWORD "$CONTAINER" \
+      pg_dump -U "$PGUSER" -Fd --no-owner --no-privileges -f /tmp/restore-test.dump -d "$DB"
+    docker cp "$CONTAINER:/tmp/restore-test.dump" "$DUMP"
+    docker exec "$CONTAINER" rm -rf /tmp/restore-test.dump
+  else
+    rm -rf "$DUMP"
+    pg_dump -U "$PGUSER" -Fd --no-owner --no-privileges -f "$DUMP" -d "$DB"
+  fi
 }
 
 restore_db() {
-  docker cp "$DUMP" "$CONTAINER:/tmp/restore-test.in"
-  docker exec -e PGPASSWORD="$PGPASSWORD" "$CONTAINER" \
-    pg_restore -U cam --no-owner --no-privileges --no-tablespaces --exit-on-error \
-    -d "$DB" /tmp/restore-test.in
-  docker exec "$CONTAINER" rm -rf /tmp/restore-test.in
+  if have_container; then
+    docker cp "$DUMP" "$CONTAINER:/tmp/restore-test.in"
+    docker exec -e PGPASSWORD "$CONTAINER" \
+      pg_restore -U "$PGUSER" --no-owner --no-privileges --no-tablespaces --exit-on-error \
+      -d "$DB" /tmp/restore-test.in
+    docker exec "$CONTAINER" rm -rf /tmp/restore-test.in
+  else
+    pg_restore -U "$PGUSER" --no-owner --no-privileges --no-tablespaces --exit-on-error -d "$DB" "$DUMP"
+  fi
 }
 
 trap 'rm -rf "$DUMP"; drop_test_db' EXIT

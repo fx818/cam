@@ -169,6 +169,52 @@ async def _require_access(
         raise ServiceDisabled(resolved_ref, audit_ref=AuditRef(service_id=service.id))
 
 
+async def _owner_qualified_template(
+    session: AsyncSession,
+    identity: AuthenticatedIdentity,
+    owner_user: User,
+    slug: str,
+) -> Service | None:
+    """Resolve `<handle>/<slug>` to a template the named owner can fund (R26).
+
+    The template's canonical ref stays `global/<slug>`; this lets agents and
+    the dashboard address a template owner-qualified when the named user holds
+    the connection the caller is entitled to use (their own, or via a share).
+    """
+    result = await session.execute(
+        select(Service).where(
+            Service.org_id == identity.org_id,
+            Service.tier == "template",
+            Service.slug == slug,
+        )
+    )
+    template = result.scalar_one_or_none()
+    if template is None:
+        return None
+    if owner_user.id == identity.user.id:
+        owned = await session.execute(
+            select(Connection.id).where(
+                Connection.org_id == identity.org_id,
+                Connection.service_id == template.id,
+                Connection.user_id == owner_user.id,
+            )
+        )
+        return template if owned.first() is not None else None
+    share = await session.execute(
+        select(Share.id)
+        .join(Connection, Share.connection_id == Connection.id)
+        .where(
+            Share.org_id == identity.org_id,
+            Share.grantee_user_id == identity.user.id,
+            Share.revoked_at.is_(None),
+            Connection.org_id == identity.org_id,
+            Connection.service_id == template.id,
+            Connection.user_id == owner_user.id,
+        )
+    )
+    return template if share.first() is not None else None
+
+
 async def _lookup_service(
     session: AsyncSession, identity: AuthenticatedIdentity, owner: str, slug: str
 ) -> tuple[Service, str | None]:
@@ -200,6 +246,8 @@ async def _lookup_service(
     )
     service = result.scalar_one_or_none()
     if service is None:
+        service = await _owner_qualified_template(session, identity, owner_user, slug)
+    if service is None:
         raise ServiceNotFound(f"{owner}/{slug}")
     return service, owner_user.handle
 
@@ -228,6 +276,47 @@ async def _connection_status_for(
     if row is not None:
         return row[0] == "connected"
     return service.auth_type == "none"
+
+
+async def _template_connection_owner(
+    session: AsyncSession, identity: AuthenticatedIdentity, service: Service
+) -> tuple[str | None, str | None]:
+    """(owner_handle, shared_by) for a template row (R26).
+
+    Mirrors `resolve_connection`: the caller's own connection first, otherwise
+    the deterministic oldest active share. `owner_handle` names the user whose
+    credential will be used; `shared_by` is set when that is someone else.
+    """
+    own = await session.execute(
+        select(Connection.status).where(
+            Connection.org_id == identity.org_id,
+            Connection.service_id == service.id,
+            Connection.user_id == identity.user.id,
+        )
+    )
+    own_row = own.first()
+    if own_row is not None and own_row[0] == "connected":
+        return identity.user.handle, None
+    shared = await session.execute(
+        select(Connection.user_id)
+        .join(Share, Share.connection_id == Connection.id)
+        .where(
+            Share.org_id == identity.org_id,
+            Connection.org_id == identity.org_id,
+            Connection.service_id == service.id,
+            Share.grantee_user_id == identity.user.id,
+            Share.revoked_at.is_(None),
+            Connection.status == "connected",
+        )
+        .order_by(Connection.created_at, Connection.id)
+    )
+    owner_id = shared.scalars().first()
+    if owner_id is None:
+        return None, None
+    owner = await session.get(User, owner_id)
+    if owner is None or owner.org_id != identity.org_id:
+        return None, None
+    return owner.handle, owner.handle
 
 
 async def list_services(
@@ -260,6 +349,19 @@ async def list_services(
             allowed.append((service, owner_handle, tool_count))
     summaries: list[ServiceSummary] = []
     for service, owner_handle, tool_count in allowed:
+        summary_owner = owner_handle if service.tier == "personal" else None
+        summary_shared_by = (
+            owner_handle
+            if service.tier == "personal" and service.owner_user_id != identity.user.id
+            else None
+        )
+        if service.tier == "template":
+            # R26: templates carry the handle of the connection owner whose
+            # credential will be used, so the gateway description can attribute
+            # them (own connection, else a share).
+            summary_owner, summary_shared_by = await _template_connection_owner(
+                session, identity, service
+            )
         summaries.append(
             ServiceSummary(
                 service_id=str(service.id),
@@ -268,12 +370,8 @@ async def list_services(
                 description=service.description,
                 tier=service.tier,
                 kind=service.kind,
-                owner=owner_handle if service.tier == "personal" else None,
-                shared_by=(
-                    owner_handle
-                    if service.tier == "personal" and service.owner_user_id != identity.user.id
-                    else None
-                ),
+                owner=summary_owner,
+                shared_by=summary_shared_by,
                 health=service.health,
                 tool_count=tool_count,
                 connected=await _connection_status_for(session, identity, service),
@@ -299,6 +397,7 @@ async def list_tools(
     result = await session.execute(
         select(Tool)
         .where(
+            Tool.org_id == resolved.service.org_id,
             Tool.service_id == resolved.service.id,
             Tool.enabled.is_(True),
             Tool.status == "active",
@@ -316,7 +415,11 @@ async def resolve_tool(
     resolved_ref = service_ref(service, owner_handle)
     await _require_access(session, identity, service, ref=tool_id, resolved_ref=resolved_ref)
     tool_result = await session.execute(
-        select(Tool).where(Tool.service_id == service.id, Tool.name == name)
+        select(Tool).where(
+            Tool.org_id == identity.org_id,
+            Tool.service_id == service.id,
+            Tool.name == name,
+        )
     )
     tool = tool_result.scalar_one_or_none()
     if tool is None or not tool.enabled or tool.status != "active":
@@ -367,10 +470,19 @@ async def resolve_connection(
             .join(Share, Share.connection_id == Connection.id)
             .where(
                 Share.org_id == service.org_id,
+                Connection.org_id == service.org_id,
                 Connection.service_id == service.id,
                 Share.grantee_user_id == user_id,
                 Share.revoked_at.is_(None),
+                # Pick the oldest *connected* share so the caller's resolution
+                # agrees with the owner attribution in the tool description
+                # (N5): filtering status in SQL avoids picking a disconnected
+                # share and then failing while a connected one exists.
+                Connection.status == "connected",
             )
+            # R26: deterministic owner-qualified fallback (oldest share first)
+            # instead of an unordered `.first()`.
+            .order_by(Connection.created_at, Connection.id)
         )
         shared_connection = shared.scalars().first()
         if shared_connection is not None and shared_connection.status == "connected":

@@ -19,3 +19,4 @@ web/openapi.json
 web/.vite/
 *.log
 .DS_Store
+rough.txt

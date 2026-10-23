@@ -28,7 +28,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { ApiError, apiFetch } from "@/lib/api"
-import { useAuth } from "@/lib/auth"
+import { useAuth, useIdentityKey } from "@/lib/auth"
 import type { AuditEntry, AuditListResponse } from "@/lib/types"
 
 interface Filters {
@@ -89,6 +89,7 @@ function buildParams(filters: Filters, cursor?: string): string {
 
 export function ActivityLogPage() {
   const { user } = useAuth()
+  const identity = useIdentityKey()
   const isAdmin = user?.role === "admin"
   const [filters, setFilters] = useState<Filters>(defaultFilters)
   const [applied, setApplied] = useState<Filters>(defaultFilters)
@@ -102,7 +103,7 @@ export function ActivityLogPage() {
   const [explaining, setExplaining] = useState(false)
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ["audit", applied],
+    queryKey: ["audit", applied, identity],
     queryFn: async () => {
       setExtraPages([])
       const response = await apiFetch<AuditListResponse>(

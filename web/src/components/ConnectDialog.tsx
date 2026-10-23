@@ -13,6 +13,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { ApiError, apiFetch } from "@/lib/api"
+import { useIdentityKey } from "@/lib/auth"
 import type { ServiceDetailResponse } from "@/lib/types"
 
 export interface ConnectTarget {
@@ -76,10 +77,11 @@ export function ConnectDialog({
   detail?: { auth_type: string; auth_config: Record<string, unknown> }
 }) {
   const queryClient = useQueryClient()
+  const identity = useIdentityKey()
   const [credential, setCredential] = useState("")
 
   const { data: fetched } = useQuery({
-    queryKey: ["service", target.id],
+    queryKey: ["service", target.id, identity],
     queryFn: () => apiFetch<ServiceDetailResponse>(`/api/services/${target.id}`),
     enabled: open && detail === undefined,
   })

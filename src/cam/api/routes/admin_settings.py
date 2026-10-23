@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from dataclasses import asdict
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Request
@@ -16,6 +17,7 @@ from cam.api.queries import (
     org_settings_public,
     update_org_settings,
 )
+from cam.api.settings_resolver import effective_settings
 from cam.connections.url_policy import AllowlistError
 from cam.db.models import Org
 
@@ -29,6 +31,9 @@ class SettingsPatchBody(BaseModel):
     response_cap_tokens: int | None = Field(default=None, ge=100, le=1_000_000)
     log_retention_days: int | None = Field(default=None, ge=1, le=3650)
     allowed_email_domains: list[str] | None = None
+    # Canonical name (what the gateway/resolver read); `instructions` kept as a
+    # deprecated alias for the current dashboard form.
+    server_instructions: str | None = Field(default=None, max_length=20_000)
     instructions: str | None = Field(default=None, max_length=20_000)
     brand: dict[str, Any] | None = None
 
@@ -44,7 +49,8 @@ async def get_settings(request: Request, admin: AdminDep) -> dict[str, object]:
     async with session_factory() as db:
         org = await db.get(Org, admin.org_id)
         assert org is not None
-        return {"settings": org_settings_public(org)}
+        effective = await effective_settings(db, admin.org_id)
+        return {"settings": org_settings_public(org), "effective": asdict(effective)}
 
 
 @router.patch("/settings")
@@ -61,7 +67,8 @@ async def patch_settings(
     async with session_factory() as db:
         settings = await update_org_settings(db, admin, updates)
         await db.commit()
-    return {"settings": settings}
+        effective = await effective_settings(db, admin.org_id)
+    return {"settings": settings, "effective": asdict(effective)}
 
 
 @router.get("/url-allowlist")

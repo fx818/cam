@@ -1,3 +1,4 @@
+import { Fragment } from "react"
 import { Navigate, Route, Routes } from "react-router-dom"
 import type { ReactNode } from "react"
 
@@ -26,14 +27,17 @@ function LoadingScreen() {
 }
 
 function RequireAuth({ children }: { children: ReactNode }) {
-  const { user, loading } = useAuth()
+  const { user, loading, identityKey } = useAuth()
   if (loading) {
     return <LoadingScreen />
   }
   if (!user) {
     return <Navigate to="/login" replace />
   }
-  return <>{children}</>
+  // Remount the whole authenticated tree when the identity changes so no page
+  // state, observer or `keepPreviousData` placeholder can survive into another
+  // account's session.
+  return <Fragment key={identityKey}>{children}</Fragment>
 }
 
 function RequireAdmin({ children }: { children: ReactNode }) {

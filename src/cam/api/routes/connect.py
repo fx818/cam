@@ -23,10 +23,15 @@ from cam.access.resolution import GLOBAL_OWNER, has_access
 from cam.api.deps import SessionIdentity, require_user
 from cam.api.errors import ApiProblem
 from cam.connections.crypto import MasterKeyRing, encrypt_secret, get_default_key_ring
-from cam.connections.oauth import OAuthFlowError, complete_authorize, start_authorize
+from cam.connections.oauth import (
+    OAuthFlowError,
+    complete_authorize,
+    delete_oauth_states,
+    start_authorize,
+)
 from cam.connections.orgs import get_org_data_key
 from cam.connections.tokens import AuthenticatedIdentity
-from cam.db.models import CamToken, Connection, OAuthState, Service, User
+from cam.db.models import CamToken, Connection, OAuthState, Org, Service, User
 from cam.registry.resync import ResyncOutcome, resync_service_id
 
 router = APIRouter(prefix="/api", tags=["connect"])
@@ -236,6 +241,11 @@ async def _connect_service(
             db, service=service, user_id=user_id, credential=body.credential.strip()
         )
         await db.commit()
+        # The stored credential changed: drop any pooled MCP session so the new
+        # Authorization header is used (review R10).
+        await request.app.state.pool.invalidate_connection(
+            str(connection.service_id), str(connection.id)
+        )
         _enqueue_import(request, service)
         return {"connection": connection_public(connection)}
 
@@ -265,6 +275,37 @@ async def connect_service_ref(
     return await _connect_service(request, identity, service, connect_body)
 
 
+async def _revalidate_callback_target(
+    db: AsyncSession, state_row: OAuthState
+) -> tuple[Service, User]:
+    """Re-check everything the start endpoint checked, before token exchange.
+
+    The stored state alone must not be trusted: between `authorize` and the
+    callback the initiating user may be deactivated, the service disabled or
+    soft-deleted, or access revoked (review R12).
+    """
+    service = await db.get(Service, state_row.service_id)
+    if service is None or service.org_id != state_row.org_id or service.status != "active":
+        raise ApiProblem("NOT_FOUND", "Service not found.", 404)
+    user = await db.get(User, state_row.user_id)
+    if (
+        user is None
+        or user.org_id != state_row.org_id
+        or user.status != "active"
+        or user.deactivated_at is not None
+    ):
+        raise ApiProblem("UNAUTHORIZED", "Sign in to continue.", 401)
+    org = await db.get(Org, user.org_id)
+    if org is None:
+        raise ApiProblem("NOT_FOUND", "Service not found.", 404)
+    identity = SessionIdentity(user=user, org=org, org_id=user.org_id)
+    if not await has_access(db, _viewer_identity(identity), service):
+        raise ApiProblem("NOT_FOUND", "Service not found.", 404)
+    # Same tier-based connect rights the start endpoint enforces.
+    await _connection_user_id(service, identity)
+    return service, user
+
+
 @router.get("/oauth/callback")
 async def oauth_callback(
     request: Request,
@@ -281,14 +322,25 @@ async def oauth_callback(
     if not code or not state:
         raise ApiProblem("VALIDATION_ERROR", "OAuth callback requires code and state", 422)
     session_factory = request.app.state.session_factory
+    pool = request.app.state.pool
     async with session_factory() as db:
-        result = await db.execute(select(OAuthState).where(OAuthState.state == state))
+        # Lock the state row first so revalidation and the exchange are atomic
+        # against a concurrent deactivation/deletion.
+        result = await db.execute(
+            select(OAuthState).where(OAuthState.state == state).with_for_update()
+        )
         state_row = result.scalar_one_or_none()
         if state_row is None:
             raise ApiProblem("NOT_FOUND", "Unknown OAuth state.", 404)
-        service = await db.get(Service, state_row.service_id)
-        if service is None:
-            raise ApiProblem("NOT_FOUND", "Service not found.", 404)
+        try:
+            service, user = await _revalidate_callback_target(db, state_row)
+        except ApiProblem:
+            # Leave no usable state behind for a now-invalid target.
+            await delete_oauth_states(
+                db, service_id=state_row.service_id, user_id=state_row.user_id
+            )
+            await db.commit()
+            raise
         try:
             await complete_authorize(
                 db,
@@ -296,9 +348,12 @@ async def oauth_callback(
                 code=code,
                 state=state,
                 base_url=settings.base_url,
+                invalidate=pool.invalidate_connection,
             )
         except OAuthFlowError as exc:
             raise ApiProblem("BAD_REQUEST", str(exc), 400) from None
+        # Drop any other outstanding authorize round-trips for this target.
+        await delete_oauth_states(db, service_id=service.id, user_id=user.id)
         await db.commit()
         _enqueue_import(request, service)
     return RedirectResponse(url=f"{base}/", status_code=302)

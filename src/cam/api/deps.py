@@ -105,11 +105,20 @@ async def load_identity(request: Request, response: Response) -> SessionIdentity
             return None
         if user.org_id != payload.org_id:
             return None
+        # Revocation: a session signed before the last version bump (logout,
+        # self-service or admin password change) no longer matches.
+        if payload.version != (user.session_version or 0):
+            return None
         org = await db.get(Org, user.org_id)
         if org is None:
             return None
         if session_needs_refresh(payload):
-            fresh = issue_session(settings.session_secret, user_id=user.id, org_id=user.org_id)
+            fresh = issue_session(
+                settings.session_secret,
+                user_id=user.id,
+                org_id=user.org_id,
+                version=user.session_version or 0,
+            )
             response.set_cookie(
                 SESSION_COOKIE,
                 fresh,
@@ -158,7 +167,7 @@ def org_public(org: Org) -> dict[str, object]:
         "name": org.name,
         "settings": {
             "brand": branding,
-            "instructions": settings.get("instructions", ""),
+            "instructions": settings.get("server_instructions") or settings.get("instructions", ""),
             "allowed_email_domains": settings.get("allowed_email_domains", []),
         },
     }

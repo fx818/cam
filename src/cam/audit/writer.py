@@ -1,8 +1,28 @@
 """Async audit-log writer: a bounded in-process buffer drained by one task.
 
 Events are captured before credentials are involved (tool arguments never
-contain secrets), queued without blocking the request, and written in batches.
-A full queue drops the event with a warning rather than failing the call.
+contain secrets), queued without blocking the request, and written in batches
+by a single background task.
+
+Durability guarantee
+--------------------
+``record()`` enqueues an event without blocking the request path and returns
+``True`` when the event was accepted (``False`` when the writer is closed or
+the bounded queue is full). Accepted events live only in memory.
+
+A batch is counted in ``AUDIT_WRITTEN`` only after its Postgres transaction
+commits, so the metric reflects rows that actually reached the database. A
+failed write is retried in place a bounded number of times with backoff before
+the batch is abandoned; abandoned events are counted in ``AUDIT_WRITE_FAILED``
+and events rejected because the queue was full in ``AUDIT_DROPPED``, so loss is
+visible instead of being silently reported as success. Retrying an audit write
+is *not* a retry of the upstream tool call.
+
+Durability is best-effort against a process crash: because the buffer is
+deliberately in-memory and bounded to keep the request path non-blocking,
+events that are queued or mid-retry are lost if the process dies before the
+background task drains them. Callers that need certainty should check
+``record()``'s return value.
 """
 
 from __future__ import annotations
@@ -14,12 +34,27 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
+from prometheus_client import Counter
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from cam.api.metrics import AUDIT_DROPPED, AUDIT_WRITTEN
+from cam.api.metrics import AUDIT_DROPPED, AUDIT_WRITTEN, REGISTRY
 from cam.db.models import AuditLog
 
 logger = logging.getLogger(__name__)
+
+# Distinct from AUDIT_DROPPED (queue-full rejections): events that were accepted
+# but could not be persisted after all write retries were exhausted. Registered
+# on the shared metrics registry so it surfaces on GET /api/metrics.
+AUDIT_WRITE_FAILED = Counter(
+    "cam_audit_events_write_failed_total",
+    "Audit events abandoned after all write retries were exhausted",
+    ["action", "status"],
+    registry=REGISTRY,
+)
+
+# Cap a single retry backoff so a wildly-backed-off attempt can't stall the
+# drain loop for an unbounded time.
+_RETRY_BACKOFF_CAP_SECONDS = 30.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,20 +137,36 @@ class AuditEvent:
 
 
 class AuditWriter:
+    """Bounded, non-blocking audit buffer drained by one background task.
+
+    The queue bounds memory to ``max_queue`` events. The single drain task
+    claims at most ``batch_size`` events at a time and retries a failed batch
+    *in place* (never re-queueing it behind newer events), so ordering is
+    preserved and the retry buffer is bounded by the batch size.
+    """
+
     def __init__(
         self,
         session_factory: async_sessionmaker[AsyncSession],
         *,
         max_queue: int = 1000,
         batch_size: int = 50,
+        max_write_attempts: int = 3,
+        retry_backoff_seconds: float = 0.5,
     ) -> None:
         if max_queue < 1:
             raise ValueError("max_queue must be >= 1")
         if batch_size < 1:
             raise ValueError("batch_size must be >= 1")
+        if max_write_attempts < 1:
+            raise ValueError("max_write_attempts must be >= 1")
+        if retry_backoff_seconds < 0:
+            raise ValueError("retry_backoff_seconds must be >= 0")
         self._session_factory = session_factory
         self._queue: asyncio.Queue[AuditEvent] = asyncio.Queue(maxsize=max_queue)
         self._batch_size = batch_size
+        self._max_write_attempts = max_write_attempts
+        self._retry_backoff_seconds = retry_backoff_seconds
         self._task: asyncio.Task[None] | None = None
         self._closed = False
 
@@ -130,6 +181,12 @@ class AuditWriter:
         return self._queue.maxsize
 
     def record(self, event: AuditEvent) -> bool:
+        """Enqueue an event without blocking.
+
+        Returns ``True`` when the event was accepted into the bounded queue and
+        ``False`` when it was not (writer closed, or queue full). The invoke
+        pipeline honours this return value.
+        """
         if self._closed:
             return False
         try:
@@ -169,14 +226,44 @@ class AuditWriter:
                 except asyncio.QueueEmpty:
                     break
             try:
-                await self._write(batch)
-                for event in batch:
-                    AUDIT_WRITTEN.labels(event.action, event.status).inc()
+                if await self._write_with_retries(batch):
+                    for item in batch:
+                        AUDIT_WRITTEN.labels(item.action, item.status).inc()
+                else:
+                    for item in batch:
+                        AUDIT_WRITE_FAILED.labels(item.action, item.status).inc()
             finally:
                 for _ in batch:
                     self._queue.task_done()
 
-    async def _write(self, batch: list[AuditEvent]) -> None:
+    async def _write_with_retries(self, batch: list[AuditEvent]) -> bool:
+        """Persist ``batch`` in place, retrying a bounded number of times.
+
+        Returns ``True`` once a commit succeeds. On exhaustion the batch is
+        abandoned (the events are lost) and ``False`` is returned so the caller
+        can count them without marking them as written. Because the retry
+        happens before the next batch is claimed, event ordering is preserved
+        and no separate (unbounded) retry buffer is needed.
+        """
+        for attempt in range(1, self._max_write_attempts + 1):
+            if await self._write(batch):
+                return True
+            if attempt < self._max_write_attempts:
+                backoff = min(
+                    self._retry_backoff_seconds * (2 ** (attempt - 1)),
+                    _RETRY_BACKOFF_CAP_SECONDS,
+                )
+                if backoff > 0:
+                    await asyncio.sleep(backoff)
+        logger.error(
+            "audit batch permanently failed after %d attempts; %d event(s) lost",
+            self._max_write_attempts,
+            len(batch),
+        )
+        return False
+
+    async def _write(self, batch: list[AuditEvent]) -> bool:
+        """Write one batch in a single transaction. Returns whether it committed."""
         try:
             async with self._session_factory() as session:
                 for event in batch:
@@ -184,3 +271,5 @@ class AuditWriter:
                 await session.commit()
         except Exception:
             logger.warning("audit batch write failed (%d events)", len(batch), exc_info=True)
+            return False
+        return True

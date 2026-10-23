@@ -23,7 +23,7 @@ import { Label } from "@/components/ui/label"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import { ApiError, apiFetch } from "@/lib/api"
-import { useAuth } from "@/lib/auth"
+import { useAuth, useIdentityKey } from "@/lib/auth"
 
 export interface SkillEntry {
   skill_id: string
@@ -327,8 +327,9 @@ function UploadDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v:
 export function SkillsPage() {
   const [uploadOpen, setUploadOpen] = useState(false)
   const { user } = useAuth()
+  const identity = useIdentityKey()
   const { data, isLoading, error } = useQuery({
-    queryKey: ["skills"],
+    queryKey: ["skills", identity],
     queryFn: () => apiFetch<SkillListResponse>("/api/skills"),
   })
   const skills = data?.skills ?? []

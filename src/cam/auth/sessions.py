@@ -7,6 +7,9 @@ from dataclasses import dataclass
 from typing import Any, cast
 
 from itsdangerous import BadSignature, URLSafeTimedSerializer
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from cam.db.models import User
 
 SESSION_COOKIE = "cam_session"
 CSRF_COOKIE = "cam_csrf"
@@ -21,6 +24,10 @@ class SessionPayload:
     user_id: uuid.UUID
     org_id: uuid.UUID
     iat: int
+    # `user.session_version` at issue time. A mismatch means the session was
+    # revoked (logout, self-service or admin password change) and must be
+    # rejected even though the signature is still valid.
+    version: int = 0
 
 
 def _serializer(secret: str) -> URLSafeTimedSerializer:
@@ -28,10 +35,20 @@ def _serializer(secret: str) -> URLSafeTimedSerializer:
 
 
 def issue_session(
-    secret: str, *, user_id: uuid.UUID, org_id: uuid.UUID, now: int | None = None
+    secret: str,
+    *,
+    user_id: uuid.UUID,
+    org_id: uuid.UUID,
+    version: int = 0,
+    now: int | None = None,
 ) -> str:
     iat = int(time.time()) if now is None else now
-    payload: dict[str, Any] = {"u": str(user_id), "o": str(org_id), "iat": iat}
+    payload: dict[str, Any] = {
+        "u": str(user_id),
+        "o": str(org_id),
+        "iat": iat,
+        "v": int(version),
+    }
     return _serializer(secret).dumps(payload)
 
 
@@ -52,6 +69,9 @@ def load_session(
         return None
     if not isinstance(raw_iat, int):
         return None
+    raw_version = data.get("v", 0)
+    if isinstance(raw_version, bool) or not isinstance(raw_version, int):
+        raw_version = 0
     try:
         user_id = uuid.UUID(raw_user)
         org_id = uuid.UUID(raw_org)
@@ -60,7 +80,21 @@ def load_session(
     current = int(time.time()) if now is None else now
     if current - raw_iat > max_age:
         return None
-    return SessionPayload(user_id=user_id, org_id=org_id, iat=raw_iat)
+    return SessionPayload(user_id=user_id, org_id=org_id, iat=raw_iat, version=raw_version)
+
+
+async def invalidate_user_sessions(session: AsyncSession, user: User) -> int:
+    """Revoke every session issued for `user` by bumping `session_version`.
+
+    Any signed cookie whose embedded version no longer matches is rejected by
+    `cam.api.deps.load_identity`. Callers must commit. Returns the new version
+    so a caller (e.g. a self-service password change) can re-issue a fresh
+    cookie for the current device.
+    """
+    new_version = (user.session_version or 0) + 1
+    user.session_version = new_version
+    await session.flush()
+    return new_version
 
 
 def new_csrf_token() -> str:

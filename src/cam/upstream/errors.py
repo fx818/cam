@@ -16,7 +16,8 @@ import httpx2
 from mcp.shared.exceptions import MCPError
 from mcp.types import CONNECTION_CLOSED, REQUEST_TIMEOUT
 
-_QUERY_RE: Final = re.compile(r"\?[^\s'\"]+")
+_QUERY_RE: Final = re.compile(r"\?[^\s'\"]*")
+_USERINFO_RE: Final = re.compile(r"//[^\s/'\"@]+:[^\s/'\"@]+@")
 
 
 class ErrorCode(StrEnum):
@@ -34,9 +35,13 @@ class UpstreamError(Exception):
     code: ClassVar[ErrorCode]
     retryable: ClassVar[bool]
 
-    def __init__(self, message: str) -> None:
+    def __init__(self, message: str, *, retries_exhausted: bool = False) -> None:
         super().__init__(message)
         self.message = message
+        # True when the establish path already consumed its single reconnect
+        # (e.g. the legacy→auto mode fallback ran and also failed), so an
+        # outer layer must not retry the session again (R35: "one reconnect").
+        self.retries_exhausted = retries_exhausted
 
 
 class UpstreamTimeoutError(UpstreamError):
@@ -71,7 +76,16 @@ class UpstreamInternalError(UpstreamError):
     retryable = True
 
 
-def _redact(text: str) -> str:
+def redact(text: str) -> str:
+    """Strip credential-bearing URL parts (query string, userinfo) from `text`.
+
+    Transport/SDK exceptions embed the request URL, which for personal
+    services can carry `?api_key=…`/`?token=…` credentials; a raw `str(exc)`
+    in an exception message or log line would leak them. This is the single
+    redaction helper every message/log line in `cam.upstream` must pass
+    through (R04).
+    """
+    text = _USERINFO_RE.sub("//[redacted]@", text)
     return _QUERY_RE.sub("?[redacted]", text)
 
 
@@ -99,7 +113,7 @@ def map_exception(
     if isinstance(exc, UpstreamError):
         return exc, False
     leaves = _flatten(exc)
-    message = _redact(str(leaves[0])) if leaves else type(exc).__name__
+    message = redact(str(leaves[0])) if leaves else type(exc).__name__
 
     if any(status in (401, 403) for status in recent_statuses):
         return UpstreamAuthError(message), False
@@ -111,13 +125,13 @@ def map_exception(
     for leaf in leaves:
         if isinstance(leaf, MCPError):
             if leaf.code == REQUEST_TIMEOUT:
-                return UpstreamTimeoutError(_redact(leaf.message)), False
+                return UpstreamTimeoutError(redact(leaf.message)), False
             if leaf.code == CONNECTION_CLOSED:
-                return UpstreamUnavailableError(_redact(leaf.message)), True
-            return UpstreamRemoteError(_redact(leaf.message)), False
+                return UpstreamUnavailableError(redact(leaf.message)), True
+            return UpstreamRemoteError(redact(leaf.message)), False
         if isinstance(leaf, httpx2.HTTPStatusError):
             status = leaf.response.status_code
-            text = _redact(str(leaf))
+            text = redact(str(leaf))
             if status in (401, 403):
                 return UpstreamAuthError(text), False
             if status == 429:
@@ -126,15 +140,15 @@ def map_exception(
                 return UpstreamUnavailableError(text), False
             return UpstreamRemoteError(text), False
         if isinstance(leaf, httpx2.TimeoutException):
-            return UpstreamTimeoutError(_redact(str(leaf))), False
+            return UpstreamTimeoutError(redact(str(leaf))), False
         if isinstance(leaf, httpx2.HTTPError):
-            return UpstreamUnavailableError(_redact(str(leaf))), True
+            return UpstreamUnavailableError(redact(str(leaf))), True
         if isinstance(leaf, TimeoutError):
-            return UpstreamTimeoutError(_redact(str(leaf))), False
+            return UpstreamTimeoutError(redact(str(leaf))), False
         if isinstance(leaf, (anyio.BrokenResourceError, anyio.ClosedResourceError)):
-            return UpstreamUnavailableError(_redact(str(leaf))), True
+            return UpstreamUnavailableError(redact(str(leaf))), True
         if isinstance(leaf, OSError):
-            return UpstreamUnavailableError(_redact(str(leaf))), True
+            return UpstreamUnavailableError(redact(str(leaf))), True
         if isinstance(leaf, Exception):
             return UpstreamInternalError(f"{type(leaf).__name__}: {message}"), False
     return UpstreamInternalError(message), False

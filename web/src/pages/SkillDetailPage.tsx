@@ -18,6 +18,7 @@ import { Label } from "@/components/ui/label"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import { ApiError, apiFetch } from "@/lib/api"
+import { useIdentityKey } from "@/lib/auth"
 import type { SkillEntry } from "@/pages/SkillsPage"
 
 interface SkillFileData {
@@ -90,6 +91,7 @@ export function SkillDetailPage() {
   const params = useParams()
   const ref = `${params.owner}/${params.slug}`
   const queryClient = useQueryClient()
+  const identity = useIdentityKey()
   const [tab, setTab] = useState("preview")
   const [editedName, setEditedName] = useState<string | null>(null)
   const [editedDescription, setEditedDescription] = useState<string | null>(null)
@@ -99,7 +101,7 @@ export function SkillDetailPage() {
   const [actionError, setActionError] = useState<string | null>(null)
 
   const detail = useQuery({
-    queryKey: ["skill", ref],
+    queryKey: ["skill", ref, identity],
     queryFn: () => apiFetch<SkillDetailResponse>(skillsPath(ref)),
   })
 
@@ -156,7 +158,7 @@ export function SkillDetailPage() {
   })
 
   const diff = useQuery({
-    queryKey: ["skill-diff", ref, diffVersion],
+    queryKey: ["skill-diff", ref, diffVersion, identity],
     queryFn: () =>
       apiFetch<DiffResponse>(
         `${skillsPath(ref)}/diff?from_version=${String(diffVersion)}`,
@@ -165,7 +167,7 @@ export function SkillDetailPage() {
   })
 
   const shares = useQuery({
-    queryKey: ["skill-shares", ref],
+    queryKey: ["skill-shares", ref, identity],
     queryFn: () => apiFetch<{ shares: SkillShareRow[] }>(`${skillsPath(ref)}/shares`),
     enabled: skill?.viewer.is_owner === true,
   })

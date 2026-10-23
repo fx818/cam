@@ -6,12 +6,14 @@ metadata:
   labels:
     app.kubernetes.io/name: cam
 spec:
+  # Single replica until sessions/rate-limits/job-schedulers move out of process
+  # memory (R15). See hpa.yaml.
   replicas: 1
   strategy:
     type: RollingUpdate
     rollingUpdate:
       maxUnavailable: 0
-      maxSurge: 1
+      maxSurge: 0
   selector:
     matchLabels:
       app.kubernetes.io/name: cam
@@ -21,6 +23,13 @@ spec:
         app.kubernetes.io/name: cam
     spec:
       serviceAccountName: cam
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: cam
           image: REGION-docker.pkg.dev/PROJECT/REPO/cam:SET_TAG_AT_DEPLOY
@@ -52,9 +61,18 @@ spec:
                 secretKeyRef:
                   name: cam-db
                   key: CAM_DATABASE_URL
+          # Non-root, no privilege escalation, no Linux capabilities (R29). The
+          # image already runs as uid 10001; these pin it at the cluster level.
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
           livenessProbe:
             httpGet:
-              path: /api/health
+              path: /api/health/live
               port: http
             initialDelaySeconds: 45
             periodSeconds: 15
@@ -70,7 +88,7 @@ spec:
             failureThreshold: 3
           startupProbe:
             httpGet:
-              path: /api/health
+              path: /api/health/live
               port: http
             periodSeconds: 5
             failureThreshold: 30

@@ -7,6 +7,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     PrimaryKeyConstraint,
@@ -59,6 +60,9 @@ class User(Base):
         String, nullable=False, default="active", server_default=text("'active'")
     )
     deactivated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    session_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("now()")
     )
@@ -125,6 +129,8 @@ class Service(Base):
         ),
         Index("ix_services_org_id", "org_id"),
         Index("ix_services_owner_user_id", "owner_user_id"),
+        # Composite tenant key: lets child tables enforce org_id = parent org.
+        UniqueConstraint("id", "org_id", name="uq_services_id_org_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
@@ -176,6 +182,12 @@ class Tool(Base):
         Index("uq_tools_service_id_name", "service_id", "name", unique=True),
         Index("ix_tools_org_id", "org_id"),
         Index("ix_tools_service_id", "service_id"),
+        # A tool must belong to the org of its service (tenant integrity).
+        ForeignKeyConstraint(
+            ["service_id", "org_id"],
+            ["services.id", "services.org_id"],
+            name="fk_tools_service_org",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
@@ -224,6 +236,12 @@ class Connection(Base):
         Index("ix_connections_org_id", "org_id"),
         Index("ix_connections_service_id", "service_id"),
         Index("ix_connections_user_id", "user_id"),
+        # A connection must belong to the org of its service (tenant integrity).
+        ForeignKeyConstraint(
+            ["service_id", "org_id"],
+            ["services.id", "services.org_id"],
+            name="fk_connections_service_org",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)

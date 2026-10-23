@@ -1,14 +1,16 @@
 from __future__ import annotations
 
+import asyncio
 import io
 import re
 import zipfile
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import cast
 
 import yaml
+from yaml.events import AliasEvent
 
 from cam.access.resolution import ServiceNotFound, parse_service_ref
 
@@ -20,6 +22,12 @@ TEXT_EXTENSIONS = frozenset({".md", ".txt", ".json", ".yaml", ".csv"})
 MAX_NAME_CHARS = 200
 MAX_DESCRIPTION_CHARS = 4000
 MAX_REQUIRES = 20
+# R08: refuse zip bundles whose declared expansion is disproportionate to their
+# compressed size (zip-bomb guard), and bound frontmatter size/complexity.
+MAX_COMPRESSION_RATIO = 200
+MAX_FRONTMATTER_BYTES = 32 * 1024
+MAX_YAML_EVENTS = 5_000
+_READ_CHUNK = 64 * 1024
 _SLUG_PATTERN = re.compile(r"^[a-z0-9]+(?:[._-][a-z0-9]+)*$")
 _ALLOWED_FILES_TEXT = (
     "skills accept text files only (.md, .txt, .json, .yaml, .csv); "
@@ -95,6 +103,28 @@ def _requires_items(value: object) -> list[str]:
     return [item for item in items if item]
 
 
+def _load_frontmatter(block: str) -> object:
+    """Parse skill frontmatter YAML with bounds (R08).
+
+    Rejects anchors/aliases (skills never need them, and they enable expansion
+    attacks) and caps the total event count, so a small upload cannot expand
+    into a large object graph.
+    """
+    try:
+        # yaml has no type stubs here; the cast keeps the unknown return contained.
+        events = list(cast("Iterable[object]", yaml.parse(block)))  # pyright: ignore[reportUnknownMemberType]
+    except yaml.YAMLError as exc:
+        raise SkillValidationError(f"frontmatter is not valid YAML: {exc}") from exc
+    if len(events) > MAX_YAML_EVENTS:
+        raise SkillValidationError("frontmatter is too complex")
+    if any(isinstance(event, AliasEvent) for event in events):
+        raise SkillValidationError("frontmatter must not use YAML anchors or aliases")
+    try:
+        return yaml.safe_load(block) or {}
+    except yaml.YAMLError as exc:
+        raise SkillValidationError(f"frontmatter is not valid YAML: {exc}") from exc
+
+
 def _parse_raw_frontmatter(text: str) -> tuple[dict[str, str], list[str], str]:
     lines = text.split("\n")
     if not lines or lines[0].strip() != "---":
@@ -107,11 +137,12 @@ def _parse_raw_frontmatter(text: str) -> tuple[dict[str, str], list[str], str]:
     if end is None:
         raise SkillValidationError("frontmatter is missing its closing '---' line")
     block = "\n".join(lines[1:end])
+    if len(block.encode("utf-8")) > MAX_FRONTMATTER_BYTES:
+        raise SkillValidationError(
+            f"frontmatter is too large: the limit is {MAX_FRONTMATTER_BYTES} bytes"
+        )
     body = "\n".join(lines[end + 1 :])
-    try:
-        parsed: object = yaml.safe_load(block) or {}
-    except yaml.YAMLError as exc:
-        raise SkillValidationError(f"frontmatter is not valid YAML: {exc}") from exc
+    parsed = _load_frontmatter(block)
     if not isinstance(parsed, dict):
         raise SkillValidationError("frontmatter must be a YAML mapping of keys to values")
     mapping = cast("dict[str, object]", parsed)
@@ -259,23 +290,84 @@ def from_editor(*, name: str, description: str, requires: list[str], body: str) 
     )
 
 
+def _read_entry_bounded(archive: zipfile.ZipFile, info: zipfile.ZipInfo, ceiling: int) -> bytes:
+    """Read one entry, aborting as soon as it exceeds ``ceiling`` bytes (R08)."""
+    buffer = bytearray()
+    with archive.open(info) as stream:
+        while True:
+            chunk = stream.read(min(_READ_CHUNK, ceiling + 1 - len(buffer)))
+            if not chunk:
+                break
+            buffer.extend(chunk)
+            if len(buffer) > ceiling:
+                raise SkillValidationError(
+                    f"{info.filename!r} is too large: the per-file limit is {MAX_FILE_BYTES} bytes"
+                )
+    return bytes(buffer)
+
+
 def from_zip(data: bytes) -> SkillSourceFiles:
-    entries: dict[str, bytes] = {}
+    """Build skill source files from a zip bundle.
+
+    R08: entry count, declared per-file/total sizes and the compression ratio
+    are all checked *before* any entry is decompressed, and each entry is then
+    streamed with a hard byte ceiling as defence in depth against a header that
+    lies about its size.
+    """
     try:
         archive = zipfile.ZipFile(io.BytesIO(data))
     except zipfile.BadZipFile:
         raise SkillValidationError("not a valid zip file") from None
+    entries: dict[str, bytes] = {}
     with archive:
-        for entry in archive.infolist():
-            if entry.is_dir():
-                continue
-            mode = entry.external_attr >> 16
+        infos = [info for info in archive.infolist() if not info.is_dir()]
+        if len(infos) > MAX_FILE_COUNT:
+            raise SkillValidationError(
+                f"too many files: {len(infos)}, the limit is {MAX_FILE_COUNT}"
+            )
+        declared_total = sum(info.file_size for info in infos)
+        if declared_total > MAX_TOTAL_BYTES:
+            raise SkillValidationError(f"the upload is too large in total: {declared_total} bytes")
+        compressed_total = sum(info.compress_size for info in infos)
+        if declared_total > 0 and compressed_total > 0:
+            ratio = declared_total / compressed_total
+            if ratio > MAX_COMPRESSION_RATIO:
+                raise SkillValidationError(
+                    "the zip is too compressed to expand safely "
+                    f"(ratio {ratio:.0f}:1, limit {MAX_COMPRESSION_RATIO}:1)"
+                )
+        total = 0
+        for info in infos:
+            mode = info.external_attr >> 16
             if mode and mode & 0o170000 == 0o120000:
                 raise SkillValidationError(
-                    f"{entry.filename!r} is a symlink; symlinks are not allowed in skills"
+                    f"{info.filename!r} is a symlink; symlinks are not allowed in skills"
                 )
-            entries[entry.filename] = archive.read(entry)
+            if info.file_size > MAX_FILE_BYTES:
+                raise SkillValidationError(
+                    f"{info.filename!r} is too large: {info.file_size} bytes, "
+                    f"the per-file limit is {MAX_FILE_BYTES}"
+                )
+            content = _read_entry_bounded(archive, info, MAX_FILE_BYTES)
+            total += len(content)
+            if total > MAX_TOTAL_BYTES:
+                raise SkillValidationError(f"the upload is too large in total: {total} bytes")
+            entries[info.filename] = content
     return parse_bundle(entries)
+
+
+async def from_zip_async(data: bytes) -> SkillSourceFiles:
+    """Run :func:`from_zip` on a worker thread.
+
+    Decompression is CPU-bound and must stay off the event loop (AGENTS async
+    rule). TODO(r08): api/routes/skills.py should call this instead of from_zip.
+    """
+    return await asyncio.to_thread(from_zip, data)
+
+
+async def parse_bundle_async(files: Mapping[str, bytes]) -> SkillSourceFiles:
+    """Run :func:`parse_bundle` on a worker thread (YAML parsing is CPU-bound)."""
+    return await asyncio.to_thread(parse_bundle, files)
 
 
 def from_folder(folder: Path) -> SkillSourceFiles:

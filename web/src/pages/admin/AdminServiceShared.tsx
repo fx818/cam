@@ -25,6 +25,7 @@ import {
 } from "@/components/ui/table"
 import { Textarea } from "@/components/ui/textarea"
 import { ApiError, apiFetch } from "@/lib/api"
+import { useIdentityKey } from "@/lib/auth"
 import type { AdminTestResult, ServiceDetail } from "@/lib/types"
 
 export interface VisibilityGrantee {
@@ -79,12 +80,13 @@ function PendingBadge({ counts }: { counts: Record<string, number> }) {
 
 function VisibilityPanel({ service, onDone }: { service: ServiceDetail; onDone: () => void }) {
   const queryClient = useQueryClient()
+  const identity = useIdentityKey()
   const [email, setEmail] = useState("")
   const [error, setError] = useState<string | null>(null)
   const normalized = service.id
 
   const query = useQuery({
-    queryKey: ["visibility", normalized],
+    queryKey: ["visibility", normalized, identity],
     queryFn: () => apiFetch<VisibilityState>(`/api/admin/services/${normalized}/visibility`),
   })
 
@@ -692,8 +694,9 @@ export function RegisterGlobalServiceForm() {
 }
 
 export function useAdminServices() {
+  const identity = useIdentityKey()
   return useQuery({
-    queryKey: ["admin-services"],
+    queryKey: ["admin-services", identity],
     queryFn: () => apiFetch<AdminServicesResponse>("/api/admin/services"),
   })
 }

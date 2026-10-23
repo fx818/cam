@@ -44,8 +44,8 @@ from cam.skills.validation import (
     SkillValidationError,
     derive_slug,
     from_editor,
-    from_zip,
-    parse_bundle,
+    from_zip_async,
+    parse_bundle_async,
     valid_slug,
 )
 
@@ -249,15 +249,17 @@ async def _files_public(db: AsyncSession, version: SkillVersion | None) -> list[
     ]
 
 
-def _source_from_body(body: SkillCreateBody | SkillVersionBody) -> Any:
+async def _source_from_body(body: SkillCreateBody | SkillVersionBody) -> Any:
     if body.zip_base64 is not None:
         try:
             data = base64.b64decode(body.zip_base64, validate=True)
         except ValueError:
             raise ApiProblem("VALIDATION_ERROR", "invalid zip_base64", 422) from None
-        return from_zip(data)
+        return await from_zip_async(data)
     if body.files:
-        return parse_bundle({item.path: item.content.encode("utf-8") for item in body.files})
+        return await parse_bundle_async(
+            {item.path: item.content.encode("utf-8") for item in body.files}
+        )
     if body.name is None or body.description is None:
         raise ApiProblem(
             "VALIDATION_ERROR", "name and description are required (or upload files)", 422
@@ -327,7 +329,7 @@ async def create_skill(
     session_factory = request.app.state.session_factory
     async with session_factory() as db:
         try:
-            source = _source_from_body(body)
+            source = await _source_from_body(body)
             slug = valid_slug(body.slug) if body.slug else derive_slug(source.name)
             skill, version = await store.create_skill(
                 db,
@@ -473,11 +475,11 @@ async def create_skill_version(
         if not context.can_manage:
             raise ApiProblem("FORBIDDEN", "You cannot change this skill.", 403)
         try:
-            source = _source_from_body(body)
+            source = await _source_from_body(body)
             if body.zip_base64 is None and not body.files:
                 merged = dict(await store.current_files(db, resolved.skill))
                 merged.update(source.files)
-                source = parse_bundle(
+                source = await parse_bundle_async(
                     {path: content.encode("utf-8") for path, content in merged.items()}
                 )
             version = await store.add_version(

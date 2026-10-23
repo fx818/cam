@@ -1,9 +1,11 @@
 import logging
+import re
 import time
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI
 from fastapi.responses import FileResponse, JSONResponse
@@ -90,6 +92,84 @@ class GatewayMount:
 
 WEB_DIST = Path(__file__).resolve().parents[3] / "web" / "dist"
 
+# R04: transport clients log the full request URL — including credential query
+# params such as `?token=` — at INFO. Scrub every log record as defence in depth
+# and hold those loggers at WARNING or above.
+_CREDENTIAL_QUERY_RE = re.compile(
+    r"(?i)([?&](?:access_token|refresh_token|id_token|api[_-]?key|apikey|token|secret"
+    r"|password|passwd|pwd|credential|signature|sig|code|auth|key)=)[^&#\s\"']+"
+)
+_AUTH_HEADER_RE = re.compile(r"(?i)\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+")
+_TRANSPORT_LOGGERS = ("httpx", "httpx2", "httpcore", "httpcore2", "urllib3", "hpack")
+
+
+def redact_credentials(text: str) -> str:
+    """Blank credential values in a log line: query-string secrets and
+    Authorization header values."""
+    text = _CREDENTIAL_QUERY_RE.sub(r"\1***", text)
+    return _AUTH_HEADER_RE.sub(r"\1 ***", text)
+
+
+class CredentialRedactionFilter(logging.Filter):
+    """Scrub credentials from every record before it reaches any handler."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            message = record.getMessage()
+        except Exception:
+            return True
+        redacted = redact_credentials(message)
+        if redacted != message:
+            record.msg = redacted
+            record.args = ()
+        return True
+
+
+def configure_logging(cfg: Settings) -> None:
+    """Install root logging with a credential-redaction filter and silence the
+    HTTP-client loggers that would otherwise print request URLs at INFO."""
+    logging.basicConfig(level=cfg.log_level, format="%(levelname)s %(name)s %(message)s")
+    root = logging.getLogger()
+    for handler in root.handlers:
+        if not any(isinstance(existing, CredentialRedactionFilter) for existing in handler.filters):
+            handler.addFilter(CredentialRedactionFilter())
+    configured = getattr(logging, cfg.log_level, logging.INFO)
+    transport_level = max(configured, logging.WARNING)
+    for name in _TRANSPORT_LOGGERS:
+        logging.getLogger(name).setLevel(transport_level)
+    # uvicorn installs its own access handler with propagate=False, so the root
+    # filter never sees those records (R04) — e.g. an OAuth `?code=`/`?state=`
+    # URL would still be logged. Attach the redaction filter to it directly.
+    for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+        uvicorn_logger = logging.getLogger(name)
+        for handler in uvicorn_logger.handlers:
+            if not any(
+                isinstance(existing, CredentialRedactionFilter) for existing in handler.filters
+            ):
+                handler.addFilter(CredentialRedactionFilter())
+
+
+def transport_security_settings(cfg: Settings) -> TransportSecuritySettings:
+    """Host/Origin (DNS-rebinding) protection for the /mcp endpoint.
+
+    Enabled in prod, with allowed hosts derived from ``CAM_BASE_URL`` (plus the
+    loopback names so in-cluster probes still pass). Left permissive in dev so
+    local agents can connect over any hostname.
+    """
+    if cfg.env != "prod":
+        return TransportSecuritySettings(enable_dns_rebinding_protection=False)
+    host = urlsplit(cfg.base_url).hostname or ""
+    allowed_hosts = ["localhost", "localhost:*", "127.0.0.1", "127.0.0.1:*"]
+    allowed_origins: list[str] = []
+    if host:
+        allowed_hosts[:0] = [host, f"{host}:*"]
+        allowed_origins = [f"https://{host}", f"http://{host}"]
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=allowed_hosts,
+        allowed_origins=allowed_origins,
+    )
+
 
 def instrumented_job(name: str, fn: Callable[[], Awaitable[Any]]) -> Callable[[], Awaitable[None]]:
     async def run() -> None:
@@ -171,7 +251,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
-        logging.basicConfig(level=cfg.log_level, format="%(levelname)s %(name)s %(message)s")
+        configure_logging(cfg)
         app.state.settings = cfg
         app.state.engine = engine
         app.state.session_factory = session_factory
@@ -184,7 +264,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         server = create_mcp_server(deps, instructions=instructions)
         _ = server.streamable_http_app(
             streamable_http_path="/mcp",
-            transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+            transport_security=transport_security_settings(cfg),
         )
         gateway.set(
             BearerAuthMiddleware(StreamableHTTPASGIApp(server.session_manager), session_factory)

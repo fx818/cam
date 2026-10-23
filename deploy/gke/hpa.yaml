@@ -10,8 +10,15 @@ spec:
     apiVersion: apps/v1
     kind: Deployment
     name: cam
+  # PINNED TO A SINGLE REPLICA (R15). CAM keeps MCP sessions, rate-limit
+  # counters, upstream pool invalidation and the job schedulers in process
+  # memory, so a second replica would give different clients a different view of
+  # that state (lost sessions, double-counted limits, duplicated jobs). Do NOT
+  # raise maxReplicas until distributed coordination lands: a shared session /
+  # rate-limit store and a singleton job runner. Keep the Deployment at
+  # replicas: 1 too. See deploy/gke/README.md.
   minReplicas: 1
-  maxReplicas: 3
+  maxReplicas: 1
   metrics:
     - type: Resource
       resource:

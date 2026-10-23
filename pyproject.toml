@@ -13,7 +13,12 @@ dependencies = [
     "click>=8.5.0",
     "cryptography>=50.0.1",
     "fastapi>=0.115",
+    # Transport stack imported directly by cam.upstream.pinning (IP pinning);
+    # declared explicitly so a transitive change in mcp/httpx cannot remove it.
+    "httpcore>=1.0.9",
+    "httpcore2>=2.13.1",
     "httpx>=0.27",
+    "httpx2>=2.13.1",
     "itsdangerous>=2.2.0",
     "jsonschema>=4.26.0",
     "mcp>=2.2.0",
@@ -21,6 +26,9 @@ dependencies = [
     "prometheus-client>=0.26.0",
     "pydantic-settings>=2.6",
     "pyyaml>=6.0.3",
+    # Imported directly by cam.invoke.validation (explicit local-only registry
+    # used to block external $ref network/file retrieval — R01).
+    "referencing>=0.37",
     "sqlalchemy[asyncio]>=2.0.36",
     "uvicorn[standard]>=0.32",
 ]
@@ -34,6 +42,7 @@ dev = [
     "pyright>=1.1.394",
     "pytest>=8.3",
     "pytest-asyncio>=0.25",
+    "pytest-cov>=6.0",
     "ruff>=0.8",
 ]
 
@@ -68,3 +77,16 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
 asyncio_default_test_loop_scope = "session"
+
+[tool.coverage.run]
+branch = true
+source = ["src/cam"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+]

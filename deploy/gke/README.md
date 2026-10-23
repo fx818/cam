@@ -77,9 +77,17 @@ kubectl apply -f deploy/gke/migration-job.yaml
 kubectl wait --for=condition=complete job/cam-migrate -n cam --timeout=600s
 kubectl apply -f deploy/gke/deployment.yaml \
               -f deploy/gke/hpa.yaml \
-              -f deploy/gke/ingress.yaml
+              -f deploy/gke/ingress.yaml \
+              -f deploy/gke/ingress-metrics.yaml
 kubectl rollout status deployment/cam -n cam
 ```
+
+The migration Job carries its **own Cloud SQL proxy sidecar** (R30), so it can
+reach the DB at `127.0.0.1:5432` exactly like the Deployment. Migrations run
+here, once, *before* the rollout; the app container no longer runs
+`alembic upgrade head` at startup (R30), which removes the rollout migration
+race. Both the Job and the Deployment use the same Workload Identity service
+account for the proxy.
 
 ## 7. DNS + TLS (8.1 "genuine" tick needs this)
 
@@ -120,17 +128,33 @@ curl https://CAM_BASE_URL/api/metrics | head      # scraped by Prometheus
 - `configmap.yaml`: non-secret `CAM_*` env, matches `docs/architecture.md`
   Configuration. `CAM_DB_POOL_SIZE`/`CAM_DB_MAX_OVERFLOW` added in Phase 8 for
   the load-test pool sizing finding (7.2).
-- `deployment.yaml` runs the Cloud SQL proxy as a sidecar. One uvicorn worker
-  per pod: MCP `Mcp-Session-Id` sessions live in process memory, and the audit
-  writer/session pools are in-process. HPA scale-up on replicas is therefore
-  sticky-limited by `sessionAffinity: ClientIP` on the Service (12 hours), and
-  the HPA can keep maxReplicas 3 meaningfully only with affinity. Use `1`
-  worker; scale by replica, not worker count.
+- `deployment.yaml` runs the app as a non-root user (uid 10001) with a
+  securityContext (no privilege escalation, all Linux capabilities dropped) and
+  a Cloud SQL proxy sidecar. One uvicorn worker per pod: MCP `Mcp-Session-Id`
+  sessions, rate-limit counters, upstream pool invalidation and the job
+  schedulers all live in process memory, so **the Deployment stays at
+  `replicas: 1`** (R15). Use `1` worker; revisit replica scaling only once
+  distributed coordination lands.
 - `rollingUpdate: maxUnavailable: 0` keeps a pod serving while a new replica
   warms up (in-memory MCP sessions on the old pod are dropped on pod delete —
   agents reconnect transparently, next request opens a fresh session).
-- `healthchecks`: liveness/readiness/startupProbe on `/api/health` (DB-backed).
-- Dockerfile bakes `HEALTHCHECK` too for plain-docker use.
-- `hpa.yaml` is a suggestion (CPU 70% target, scale-down stabilization).
+- `healthchecks`: liveness/readiness/startupProbe on `/api/health`. NOTE: that
+  endpoint is DB-backed, so it is really a readiness signal; splitting a
+  dependency-free liveness probe out of `src/cam/api/routes/health.py` is a
+  cross-file follow-up (that route is outside this change set).
+- Dockerfile bakes `HEALTHCHECK` too for plain-docker use. The image runs
+  **non-root** and **no longer runs `alembic upgrade head` at container start**
+  (R30) — schema migrations run in the Job below (and, for local compose, a
+  one-shot `migrate` service).
+- `hpa.yaml` is pinned to `minReplicas: 1` / `maxReplicas: 1` (R15); see the
+  deployment note above. Revisit when distributed state lands.
 - `migration-job.yaml` runs `alembic upgrade head` before the deploy and exits;
-  TTL cleans it up. `CAM_JOBS_ENABLED=false` so it doesn't schedule jobs.
+  it now carries its **own Cloud SQL proxy sidecar** so it can reach the DB at
+  `127.0.0.1:5432` (R30 — previously only the Deployment had the proxy, so the
+  Job could never connect). TTL cleans it up. `CAM_JOBS_ENABLED=false` so it
+  doesn't schedule jobs.
+- `ingress.yaml` serves `/`; `ingress-metrics.yaml` is a second Ingress that
+  matches `/api/metrics` with `pathType: Exact` and a `whitelist-source-range`,
+  restricting the unauthenticated metrics route to the monitoring network
+  (R29). Set that range to the Prometheus scraper's source IP range, and apply
+  both Ingress files.

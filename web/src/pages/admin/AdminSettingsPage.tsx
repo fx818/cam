@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/table"
 import { Textarea } from "@/components/ui/textarea"
 import { ApiError, apiFetch } from "@/lib/api"
+import { useIdentityKey } from "@/lib/auth"
 import type {
   AdminSettings,
   AdminSettingsResponse,
@@ -32,6 +33,7 @@ import type {
 
 export function AdminSettingsPage() {
   const queryClient = useQueryClient()
+  const identity = useIdentityKey()
   const [timeoutMs, setTimeoutMs] = useState<string | null>(null)
   const [cap, setCap] = useState<string | null>(null)
   const [retention, setRetention] = useState<string | null>(null)
@@ -44,12 +46,12 @@ export function AdminSettingsPage() {
   const [allowMessage, setAllowMessage] = useState<string | null>(null)
 
   const settingsQuery = useQuery({
-    queryKey: ["admin-settings"],
+    queryKey: ["admin-settings", identity],
     queryFn: () => apiFetch<AdminSettingsResponse>("/api/admin/settings"),
   })
 
   const allowQuery = useQuery({
-    queryKey: ["admin-allowlist"],
+    queryKey: ["admin-allowlist", identity],
     queryFn: () => apiFetch<AllowlistResponse>("/api/admin/url-allowlist"),
   })
 

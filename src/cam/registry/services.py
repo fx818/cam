@@ -1,4 +1,5 @@
 import re
+import uuid
 from collections.abc import Sequence
 from typing import Any, Literal
 
@@ -9,7 +10,7 @@ from cam.access.resolution import ServiceNotFound, parse_service_ref
 from cam.accounts.users import get_user_by_email
 from cam.config import Settings
 from cam.connections.crypto import MasterKeyRing, encrypt_secret, get_default_key_ring
-from cam.connections.orgs import ensure_org, get_org_data_key
+from cam.connections.orgs import ensure_org, get_org_by_id, get_org_data_key
 from cam.connections.url_policy import load_url_allowlist
 from cam.db.models import Connection, Service, ServiceVisibility, User
 from cam.upstream.url import UrlPolicy, admit_url, validate_outbound_url
@@ -38,6 +39,70 @@ class ServiceError(Exception):
 
 class ServiceAlreadyExists(ServiceError):
     pass
+
+
+async def _admin_org_id(session: AsyncSession, org_id: uuid.UUID | None) -> uuid.UUID:
+    """Resolve the org an admin-reachable helper operates in (R02).
+
+    HTTP routes always pass the authenticated admin's ``org_id``. Direct
+    service-layer callers (CLI, tests) may omit it; those fall back to the
+    default-org bootstrap lookup so legacy call sites keep working.
+    """
+    if org_id is not None:
+        return org_id
+    org = await ensure_org(session)
+    return org.id
+
+
+async def _creation_org_id(session: AsyncSession, *, org_id: uuid.UUID | None) -> uuid.UUID:
+    """Resolve the org for a global/template registration (R02).
+
+    An explicit ``org_id`` must name an existing org; absent that we keep the
+    default-org bootstrap fallback for CLI/tests. Never read from request
+    input — the route supplies the admin's org.
+    """
+    if org_id is None:
+        org = await ensure_org(session)
+        return org.id
+    org = await get_org_by_id(session, org_id)
+    if org is None:
+        raise ServiceError(f"org {org_id} does not exist")
+    return org.id
+
+
+async def _effective_service_defaults(session: AsyncSession, org_id: uuid.UUID) -> tuple[int, int]:
+    """Default (timeout_ms, response_cap_tokens) for a new service (R23).
+
+    Uses the org's effective settings (`cam.api.settings_resolver`), falling
+    back to the env-level `Settings` defaults when a key is unset or, defensively,
+    when the resolver module is unavailable.
+    """
+    settings = Settings()
+    try:
+        from cam.api.settings_resolver import effective_settings
+    except ImportError:  # pragma: no cover - defensive; resolver ships with the app
+        return settings.default_timeout_s * 1000, settings.default_response_cap_tokens
+    effective = await effective_settings(session, org_id)
+    timeout_s = effective.default_timeout_s or settings.default_timeout_s
+    cap = effective.default_response_cap_tokens or settings.default_response_cap_tokens
+    return int(timeout_s) * 1000, int(cap)
+
+
+async def _validate_personal_destination(url: str, *, policy: UrlPolicy) -> None:
+    """DNS-validate a personal destination at registration (R19).
+
+    Rejects destinations that resolve to a blocked/internal address. A host
+    that does not resolve *right now* (NXDOMAIN, offline) is allowed through:
+    registration must work while a host is temporarily unresolvable, and every
+    outbound request re-checks the URL policy at connect time (AGENTS.md).
+    """
+    try:
+        await validate_outbound_url(url, policy=policy)
+    except ValueError as exc:
+        message = str(exc)
+        if "cannot resolve" in message or "resolved to no addresses" in message:
+            return
+        raise ServiceError(message) from exc
 
 
 def _validate_registration(
@@ -106,6 +171,7 @@ async def register_global_mcp(
     header_name: str | None = None,
     credential: str | None = None,
     description: str = "",
+    org_id: uuid.UUID | None = None,
     ring: MasterKeyRing | None = None,
 ) -> tuple[Service, Connection]:
     resolved_slug, resolved_name, resolved_url, auth_config = _validate_registration(
@@ -120,7 +186,12 @@ async def register_global_mcp(
     )
 
     key_ring = ring if ring is not None else get_default_key_ring()
-    org = await ensure_org(session, ring=key_ring)
+    if org_id is None:
+        org = await ensure_org(session, ring=key_ring)
+    else:
+        org = await get_org_by_id(session, org_id)
+        if org is None:
+            raise ServiceError(f"org {org_id} does not exist")
     existing = await session.execute(
         select(Service.id).where(
             Service.org_id == org.id,
@@ -133,7 +204,7 @@ async def register_global_mcp(
             f"service slug {resolved_slug!r} is already registered in this org"
         )
 
-    settings = Settings()
+    timeout_ms, response_cap_tokens = await _effective_service_defaults(session, org.id)
     service = Service(
         org_id=org.id,
         tier="global",
@@ -147,8 +218,8 @@ async def register_global_mcp(
         auth_type=auth_type,
         auth_config=auth_config,
         visibility="all",
-        timeout_ms=settings.default_timeout_s * 1000,
-        response_cap_tokens=settings.default_response_cap_tokens,
+        timeout_ms=timeout_ms,
+        response_cap_tokens=response_cap_tokens,
         status="active",
         health="unknown",
     )
@@ -230,7 +301,7 @@ async def register_personal_mcp(
             f"slug {resolved_slug!r} is reserved by a template service in this org"
         )
 
-    settings = Settings()
+    timeout_ms, response_cap_tokens = await _effective_service_defaults(session, owner.org_id)
     service = Service(
         org_id=owner.org_id,
         tier="personal",
@@ -244,8 +315,8 @@ async def register_personal_mcp(
         auth_type=auth_type,
         auth_config=auth_config,
         visibility="all",
-        timeout_ms=settings.default_timeout_s * 1000,
-        response_cap_tokens=settings.default_response_cap_tokens,
+        timeout_ms=timeout_ms,
+        response_cap_tokens=response_cap_tokens,
         status="active",
         health="unknown",
     )
@@ -266,7 +337,13 @@ async def register_personal_mcp(
     return service, connection
 
 
-async def set_service_status(session: AsyncSession, *, ref: str, status: ServiceStatus) -> Service:
+async def set_service_status(
+    session: AsyncSession,
+    *,
+    ref: str,
+    status: ServiceStatus,
+    org_id: uuid.UUID | None = None,
+) -> Service:
     if status not in _SERVICE_STATUSES:
         raise ServiceError("status must be active or disabled")
     try:
@@ -275,25 +352,25 @@ async def set_service_status(session: AsyncSession, *, ref: str, status: Service
         raise ServiceError(
             f"invalid service id {ref!r}; expected global/<slug> or <handle>/<slug>"
         ) from None
-    org = await ensure_org(session)
+    resolved_org_id = await _admin_org_id(session, org_id)
     if owner_part == "global":
         result = await session.execute(
             select(Service).where(
-                Service.org_id == org.id,
+                Service.org_id == resolved_org_id,
                 Service.tier == "global",
                 Service.slug == slug,
             )
         )
     else:
         owner_result = await session.execute(
-            select(User).where(User.org_id == org.id, User.handle == owner_part)
+            select(User).where(User.org_id == resolved_org_id, User.handle == owner_part)
         )
         owner_user = owner_result.scalar_one_or_none()
         if owner_user is None:
             raise ServiceError(f"no user with handle {owner_part!r} in this org")
         result = await session.execute(
             select(Service).where(
-                Service.org_id == org.id,
+                Service.org_id == resolved_org_id,
                 Service.tier == "personal",
                 Service.owner_user_id == owner_user.id,
                 Service.slug == slug,
@@ -307,14 +384,14 @@ async def set_service_status(session: AsyncSession, *, ref: str, status: Service
     return service
 
 
-async def _get_admin_service(session: AsyncSession, slug: str) -> Service:
+async def _get_admin_service(session: AsyncSession, slug: str, *, org_id: uuid.UUID) -> Service:
+    """Load a global/template service scoped to ``org_id`` (required)."""
     resolved_slug = slug.strip().lower()
     if not resolved_slug:
         raise ServiceError("slug must not be empty")
-    org = await ensure_org(session)
     result = await session.execute(
         select(Service).where(
-            Service.org_id == org.id,
+            Service.org_id == org_id,
             Service.tier.in_(("global", "template")),
             Service.slug == resolved_slug,
         )
@@ -326,22 +403,34 @@ async def _get_admin_service(session: AsyncSession, slug: str) -> Service:
 
 
 async def set_service_visibility(
-    session: AsyncSession, *, slug: str, visibility: ServiceVisibilityLevel
+    session: AsyncSession,
+    *,
+    slug: str,
+    visibility: ServiceVisibilityLevel,
+    org_id: uuid.UUID | None = None,
 ) -> Service:
     if visibility not in _VISIBILITY_LEVELS:
         raise ServiceError("visibility must be all or restricted")
-    service = await _get_admin_service(session, slug)
+    resolved_org_id = await _admin_org_id(session, org_id)
+    service = await _get_admin_service(session, slug, org_id=resolved_org_id)
     service.visibility = visibility
     await session.flush()
     return service
 
 
-async def grant_service_visibility(session: AsyncSession, *, slug: str, user_email: str) -> Service:
-    service = await _get_admin_service(session, slug)
+async def grant_service_visibility(
+    session: AsyncSession,
+    *,
+    slug: str,
+    user_email: str,
+    org_id: uuid.UUID | None = None,
+) -> Service:
+    resolved_org_id = await _admin_org_id(session, org_id)
+    service = await _get_admin_service(session, slug, org_id=resolved_org_id)
     user = await get_user_by_email(session, user_email)
     if user is None:
         raise ServiceError(f"no user with email {user_email}")
-    if user.org_id != service.org_id:
+    if user.org_id != resolved_org_id:
         raise ServiceError("user belongs to a different org than the service")
     existing = await session.execute(
         select(ServiceVisibility.id).where(
@@ -364,12 +453,19 @@ async def grant_service_visibility(session: AsyncSession, *, slug: str, user_ema
 
 
 async def revoke_service_visibility(
-    session: AsyncSession, *, slug: str, user_email: str
+    session: AsyncSession,
+    *,
+    slug: str,
+    user_email: str,
+    org_id: uuid.UUID | None = None,
 ) -> Service:
-    service = await _get_admin_service(session, slug)
+    resolved_org_id = await _admin_org_id(session, org_id)
+    service = await _get_admin_service(session, slug, org_id=resolved_org_id)
     user = await get_user_by_email(session, user_email)
     if user is None:
         raise ServiceError(f"no user with email {user_email}")
+    if user.org_id != resolved_org_id:
+        raise ServiceError("user belongs to a different org than the service")
     existing = await session.execute(
         select(ServiceVisibility.id).where(
             ServiceVisibility.org_id == service.org_id,
@@ -390,8 +486,11 @@ async def revoke_service_visibility(
     return service
 
 
-async def get_admin_service(session: AsyncSession, *, slug: str) -> Service:
-    return await _get_admin_service(session, slug)
+async def get_admin_service(
+    session: AsyncSession, *, slug: str, org_id: uuid.UUID | None = None
+) -> Service:
+    resolved_org_id = await _admin_org_id(session, org_id)
+    return await _get_admin_service(session, slug, org_id=resolved_org_id)
 
 
 async def list_service_visibility_grantees(
@@ -403,6 +502,7 @@ async def list_service_visibility_grantees(
         .where(
             ServiceVisibility.org_id == service.org_id,
             ServiceVisibility.service_id == service.id,
+            User.org_id == service.org_id,
         )
         .order_by(User.email)
     )
@@ -505,6 +605,7 @@ async def register_service(
     visibility: ServiceVisibilityLevel = "all",
     owner: User | None = None,
     tools: Sequence[str] | None = None,
+    org_id: uuid.UUID | None = None,
     ring: MasterKeyRing | None = None,
 ) -> tuple[Service, Connection | None]:
     if tier not in _TIERS:
@@ -536,12 +637,16 @@ async def register_service(
             raise ServiceError("personal services require an owner")
         if owner.status != "active" or owner.deactivated_at is not None:
             raise ServiceError(f"user {owner.email} is not active")
-        org_id = owner.org_id
+        if org_id is not None and org_id != owner.org_id:
+            raise ServiceError("personal services must belong to the owner's org")
+        resolved_org_id = owner.org_id
     else:
         if owner is not None:
             raise ServiceError(f"{tier} services must not set an owner")
-        org = await ensure_org(session)
-        org_id = org.id
+        # R02: the org comes from the authenticated admin's org_id, never a
+        # request-supplied default. `_creation_org_id` keeps the bootstrap
+        # fallback for CLI/test callers only.
+        resolved_org_id = await _creation_org_id(session, org_id=org_id)
 
     auth_config = _validate_register_auth(
         auth_type=auth_type,
@@ -557,21 +662,29 @@ async def register_service(
     restricted = tier == "personal"
     allowlist: tuple[str, ...] = ()
     if restricted:
-        allowlist = await load_url_allowlist(session, org_id=org_id)
+        allowlist = await load_url_allowlist(session, org_id=resolved_org_id)
+    policy = UrlPolicy(restricted=restricted, allowlist=allowlist)
     try:
         admit_url(resolved_url, restricted=restricted, allowlist=allowlist)
     except ValueError as exc:
         raise ServiceError(str(exc)) from exc
-    if spec_url:
+    if restricted:
+        # R19: personal destinations must pass the DNS-resolving URL policy,
+        # matching the personal-MCP registration path and the request-time check.
+        await _validate_personal_destination(resolved_url, policy=policy)
+    resolved_spec_url = spec_url.strip() if spec_url else None
+    if resolved_spec_url:
         try:
-            admit_url(spec_url.strip(), restricted=restricted, allowlist=allowlist)
+            admit_url(resolved_spec_url, restricted=restricted, allowlist=allowlist)
         except ValueError as exc:
             raise ServiceError(str(exc)) from exc
+        if restricted:
+            await _validate_personal_destination(resolved_spec_url, policy=policy)
 
     if tier in ("global", "template"):
         existing = await session.execute(
             select(Service.id).where(
-                Service.org_id == org_id,
+                Service.org_id == resolved_org_id,
                 Service.slug == resolved_slug,
                 Service.tier.in_(("global", "template")),
             )
@@ -584,7 +697,7 @@ async def register_service(
         assert owner is not None
         existing = await session.execute(
             select(Service.id).where(
-                Service.org_id == org_id,
+                Service.org_id == resolved_org_id,
                 Service.tier == "personal",
                 Service.owner_user_id == owner.id,
                 Service.slug == resolved_slug,
@@ -596,7 +709,7 @@ async def register_service(
             )
         template = await session.execute(
             select(Service.id).where(
-                Service.org_id == org_id,
+                Service.org_id == resolved_org_id,
                 Service.tier == "template",
                 Service.slug == resolved_slug,
             )
@@ -606,9 +719,9 @@ async def register_service(
                 f"slug {resolved_slug!r} is reserved by a template service in this org"
             )
 
-    settings = Settings()
+    default_timeout_ms, default_cap = await _effective_service_defaults(session, resolved_org_id)
     service = Service(
-        org_id=org_id,
+        org_id=resolved_org_id,
         tier=tier,
         owner_user_id=owner.id if owner is not None else None,
         slug=resolved_slug,
@@ -617,15 +730,13 @@ async def register_service(
         kind=kind,
         url=resolved_url,
         transport=transport if kind == "mcp" else None,
-        spec_url=spec_url.strip() if spec_url else None,
+        spec_url=resolved_spec_url,
         auth_type=auth_type,
         auth_config=auth_config,
         visibility=visibility if tier != "personal" else "all",
-        timeout_ms=timeout_ms if timeout_ms is not None else settings.default_timeout_s * 1000,
+        timeout_ms=timeout_ms if timeout_ms is not None else default_timeout_ms,
         response_cap_tokens=(
-            response_cap_tokens
-            if response_cap_tokens is not None
-            else settings.default_response_cap_tokens
+            response_cap_tokens if response_cap_tokens is not None else default_cap
         ),
         status="active",
         health="unknown",
@@ -636,7 +747,7 @@ async def register_service(
     if auth_type == "oauth" and credential is not None and credential.strip():
         key_ring_secret = ring if ring is not None else get_default_key_ring()
         secret_key_version, secret_data_key = await get_org_data_key(
-            session, org_id, ring=key_ring_secret
+            session, resolved_org_id, ring=key_ring_secret
         )
         service.auth_secret_enc = encrypt_secret(
             credential.strip().encode("utf-8"), secret_data_key, key_version=secret_key_version
@@ -646,9 +757,9 @@ async def register_service(
     connection: Connection | None = None
     if auth_type != "oauth" and tier != "template":
         key_ring = ring if ring is not None else get_default_key_ring()
-        key_version, data_key = await get_org_data_key(session, org_id, ring=key_ring)
+        key_version, data_key = await get_org_data_key(session, resolved_org_id, ring=key_ring)
         connection = Connection(
-            org_id=org_id,
+            org_id=resolved_org_id,
             service_id=service.id,
             user_id=owner.id if owner is not None else None,
             secret_enc=_encrypt_credential(credential, data_key=data_key, key_version=key_version),

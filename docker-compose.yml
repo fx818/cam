@@ -1,12 +1,14 @@
 services:
   db:
-    image: postgres:16-alpine
+    # Pinned by digest for reproducibility (R37).
+    image: postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
     environment:
       POSTGRES_USER: cam
       POSTGRES_PASSWORD: cam
       POSTGRES_DB: cam
     ports:
-      - "5432:5432"
+      # Bind to loopback only (R29): the DB must never be reachable from the LAN.
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
@@ -16,8 +18,27 @@ services:
       timeout: 3s
       retries: 12
 
+  # One-shot migration runner (R30). The app image no longer runs migrations at
+  # start; this service applies them once and exits before the app starts.
+  migrate:
+    build: .
+    image: cam-app
+    command: ["sh", "-c", "uv run --no-sync alembic upgrade head"]
+    environment:
+      CAM_ENV: ${CAM_ENV:-dev}
+      CAM_DATABASE_URL: ${CAM_DATABASE_URL:-postgresql+asyncpg://cam:cam@db:5432/cam}
+      CAM_ENCRYPTION_KEYS: ${CAM_ENCRYPTION_KEYS}
+      CAM_ENCRYPTION_KEY_CURRENT: ${CAM_ENCRYPTION_KEY_CURRENT:-v1}
+      CAM_SESSION_SECRET: ${CAM_SESSION_SECRET}
+      CAM_JOBS_ENABLED: "false"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
   app:
     build: .
+    image: cam-app
     ports:
       - "8001:8000"
     environment:
@@ -30,6 +51,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     healthcheck:
       test:
         [

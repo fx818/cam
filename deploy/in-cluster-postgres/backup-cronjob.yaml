@@ -18,12 +18,17 @@ spec:
           restartPolicy: OnFailure
           containers:
             - name: pg-dump
-              image: postgres:16-alpine
+              # Pinned by digest for reproducibility (R37).
+              image: postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
               command:
                 - sh
                 - -c
-                - set -eu; pg_dump -h cam-postgres -U cam -Fc -f /backups/cam-$(date +%Y%m%d).dump
-                  /cam && ls -la /backups
+                - |
+                  set -eu
+                  # Database name must be a bare identifier (R31): the previous
+                  # "/cam" was read by pg_dump as a file path and the dump failed.
+                  pg_dump -h cam-postgres -U cam -Fc --no-owner -f "/backups/cam-$(date +%Y%m%d).dump" -d cam
+                  ls -la /backups
               env:
                 - name: PGPASSWORD
                   valueFrom:

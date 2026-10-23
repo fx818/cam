@@ -89,14 +89,29 @@ def _upcoming_months(count: int) -> list[tuple[int, int]]:
     return months
 
 
-def _create_month_partition(year: int, month: int) -> None:
+def _existing_months() -> list[tuple[int, int]]:
+    """Distinct calendar months present in the current (unpartitioned) audit_logs."""
+    rows = (
+        op.get_bind()
+        .execute(
+            sa.text(
+                "SELECT DISTINCT date_trunc('month', ts AT TIME ZONE 'UTC') AS month "
+                "FROM audit_logs"
+            )
+        )
+        .fetchall()
+    )
+    return [(row[0].year, row[0].month) for row in rows if row[0] is not None]
+
+
+def _create_month_partition(year: int, month: int, *, parent: str = "audit_logs") -> None:
     from cam.db.partitions import partition_bounds, partition_name
 
     start, end = partition_bounds(year, month)
     name = partition_name(year, month)
     op.execute(
         sa.text(
-            f"CREATE TABLE {name} PARTITION OF audit_logs "
+            f"CREATE TABLE {name} PARTITION OF {parent} "
             f"FOR VALUES FROM ('{start.isoformat()}') TO ('{end.isoformat()}')"
         )
     )
@@ -122,13 +137,18 @@ def upgrade() -> None:
         )
     )
     _add_fks("audit_logs_new")
+    # Child partitions must exist before any row is copied in, otherwise
+    # Postgres raises 'no partition of relation "audit_logs_new" found for row'.
+    # Cover every month already present in the old table plus the current and
+    # next month for fresh writes.
+    months = list(dict.fromkeys([*_existing_months(), *_upcoming_months(2)]))
+    for year, month in months:
+        _create_month_partition(year, month, parent="audit_logs_new")
     op.execute(sa.text("INSERT INTO audit_logs_new SELECT * FROM audit_logs"))
     op.execute(sa.text("DROP TABLE audit_logs"))
     op.execute(sa.text("ALTER TABLE audit_logs_new RENAME TO audit_logs"))
     op.execute(sa.text("ALTER INDEX audit_logs_new_pkey RENAME TO audit_logs_pkey"))
     _rename_fks("audit_logs_new")
-    for year, month in _upcoming_months(2):
-        _create_month_partition(year, month)
     _create_indexes("audit_logs")
 
 

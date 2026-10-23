@@ -19,6 +19,7 @@ def create_db_engine(
         pool_pre_ping=True,
         pool_size=pool_size,
         max_overflow=max_overflow,
+        hide_parameters=True,
     )
 
 

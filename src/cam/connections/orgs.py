@@ -35,6 +35,23 @@ async def get_org_by_slug(session: AsyncSession, slug: str) -> Org | None:
     return result.scalar_one_or_none()
 
 
+async def get_org_by_id(session: AsyncSession, org_id: uuid.UUID) -> Org | None:
+    """Fetch an existing org by primary key; never creates one."""
+    return await session.get(Org, org_id)
+
+
+async def get_org(session: AsyncSession, org_id: uuid.UUID) -> Org:
+    """Fetch an existing org by primary key, raising when it is absent.
+
+    Admin-scoped operations use this instead of `ensure_org` so they never
+    silently fall back to the default org (R02).
+    """
+    org = await get_org_by_id(session, org_id)
+    if org is None:
+        raise OrgNotFoundError(f"org {org_id} does not exist")
+    return org
+
+
 async def ensure_org(
     session: AsyncSession,
     *,
@@ -43,6 +60,13 @@ async def ensure_org(
     settings: dict[str, Any] | None = None,
     ring: MasterKeyRing | None = None,
 ) -> Org:
+    """Bootstrap lookup: return the named org, creating it if missing.
+
+    This is the *only* default-org creation path and is reserved for
+    authentication/bootstrap flows (first login, CLI `create-admin`) and
+    service-layer test fixtures. Admin-reachable operations must take an
+    explicit `org_id` derived from the authenticated admin instead (R02/R25).
+    """
     key_ring = ring if ring is not None else get_default_key_ring()
     org = await get_org_by_slug(session, slug)
     if org is None:

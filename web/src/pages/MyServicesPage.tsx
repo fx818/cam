@@ -6,6 +6,7 @@ import { ConnectDialog, type ConnectTarget } from "@/components/ConnectDialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { ApiError, apiFetch } from "@/lib/api"
+import { useIdentityKey } from "@/lib/auth"
 import type { DashboardService, ServicesListResponse } from "@/lib/types"
 
 function healthVariant(health: string): "success" | "destructive" | "warning" | "muted" {
@@ -112,10 +113,11 @@ function Section({
 
 export function MyServicesPage() {
   const queryClient = useQueryClient()
+  const identity = useIdentityKey()
   const [connectTarget, setConnectTarget] = useState<ConnectTarget | null>(null)
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ["services"],
+    queryKey: ["services", identity],
     queryFn: () => apiFetch<ServicesListResponse>("/api/services"),
   })
 

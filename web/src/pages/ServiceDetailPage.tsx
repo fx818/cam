@@ -42,6 +42,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import { ApiError, apiFetch } from "@/lib/api"
+import { useIdentityKey } from "@/lib/auth"
 import type {
   AuditEntry,
   AuditListResponse,
@@ -67,6 +68,7 @@ function ToolsTab({
   canManage: boolean
 }) {
   const queryClient = useQueryClient()
+  const identity = useIdentityKey()
   const [editing, setEditing] = useState<ToolRow | null>(null)
   const [description, setDescription] = useState("")
   const [usageNote, setUsageNote] = useState("")
@@ -78,7 +80,7 @@ function ToolsTab({
   const [status, setStatus] = useState<string | null>(null)
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ["tools", refPath],
+    queryKey: ["tools", refPath, identity],
     queryFn: () => apiFetch<ToolsResponse>(`/api/services/${refPath}/tools`),
   })
 
@@ -503,12 +505,13 @@ function SharingTab({
   connectionId: string | null
 }) {
   const queryClient = useQueryClient()
+  const identity = useIdentityKey()
   const [email, setEmail] = useState("")
   const [message, setMessage] = useState<string | null>(null)
   const [revokeTarget, setRevokeTarget] = useState<ShareRow | null>(null)
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ["shares", connectionId],
+    queryKey: ["shares", connectionId, identity],
     enabled: connectionId !== null,
     queryFn: () =>
       apiFetch<SharesResponse>(`/api/connections/${connectionId}/shares`),
@@ -737,8 +740,9 @@ function SettingsTab({
 }) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
+  const identity = useIdentityKey()
   const { data } = useQuery({
-    queryKey: ["service", refPath],
+    queryKey: ["service", refPath, identity],
     queryFn: () => apiFetch<ServiceDetailResponse>(`/api/services/${refPath}`),
   })
   const [name, setName] = useState<string | null>(null)
@@ -906,10 +910,11 @@ function SettingsTab({
 export function ServiceDetailPage() {
   const { owner = "", slug = "" } = useParams()
   const refPath = `${owner}/${slug}`
+  const identity = useIdentityKey()
   const [connectOpen, setConnectOpen] = useState(false)
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ["service", refPath],
+    queryKey: ["service", refPath, identity],
     queryFn: () => apiFetch<ServiceDetailResponse>(`/api/services/${refPath}`),
   })
 

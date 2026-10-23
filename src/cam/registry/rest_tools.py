@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -77,6 +77,31 @@ def _derive_input_schema(params: Mapping[str, str]) -> dict[str, Any]:
     return schema
 
 
+def _first_external_ref(node: Any) -> str | None:
+    """Return the first ``$ref`` that is not a local ``#/`` fragment, if any.
+
+    A stored ``input_schema`` is later handed to jsonschema for argument
+    validation; a non-local ``$ref`` would make that step fetch the network or
+    the filesystem. Manual definitions must stay self-contained.
+    """
+    if isinstance(node, list):
+        for item in cast("list[Any]", node):
+            found = _first_external_ref(item)
+            if found is not None:
+                return found
+        return None
+    if isinstance(node, Mapping):
+        mapping = cast("Mapping[str, Any]", node)
+        ref = mapping.get("$ref")
+        if isinstance(ref, str) and not ref.startswith("#/"):
+            return ref
+        for value in mapping.values():
+            found = _first_external_ref(value)
+            if found is not None:
+                return found
+    return None
+
+
 def _resolve_input_schema(
     input_schema: Mapping[str, Any] | None, params: Mapping[str, str]
 ) -> dict[str, Any]:
@@ -87,6 +112,12 @@ def _resolve_input_schema(
     properties = input_schema.get("properties")
     if not isinstance(properties, Mapping):
         raise RestToolError("input_schema must have properties")
+    external = _first_external_ref(input_schema)
+    if external is not None:
+        raise RestToolError(
+            f"input_schema must not reference outside itself (found {external!r}); "
+            "only local '#/' references are allowed"
+        )
     for name, location in params.items():
         if location == "path" and name not in properties:
             raise RestToolError(f"input_schema is missing the path parameter {name!r}")

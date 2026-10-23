@@ -18,6 +18,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { ApiError, apiFetch } from "@/lib/api"
+import { useIdentityKey } from "@/lib/auth"
 import type { OverviewResponse } from "@/lib/types"
 
 const KIND_LABELS: Record<string, string> = {
@@ -91,8 +92,9 @@ function StatCard({
 }
 
 export function AdminOverviewPage() {
+  const identity = useIdentityKey()
   const { data, isLoading, error } = useQuery({
-    queryKey: ["admin-overview"],
+    queryKey: ["admin-overview", identity],
     queryFn: () => apiFetch<OverviewResponse>("/api/admin/overview"),
   })
 

@@ -12,9 +12,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import contextvars
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Generator, Sequence
 from contextlib import AsyncExitStack
 from typing import Any, cast
 
@@ -26,9 +27,11 @@ from mcp.client.streamable_http import streamable_http_client
 
 from cam.upstream.errors import (
     UpstreamError,
+    UpstreamRemoteError,
     UpstreamTimeoutError,
     UpstreamUnavailableError,
     map_exception,
+    redact,
 )
 from cam.upstream.normalize import normalize_call_result
 from cam.upstream.pinning import pinned_transport_httpx2
@@ -42,16 +45,41 @@ logger = logging.getLogger(__name__)
 _HTTP_CONNECT_TIMEOUT_S = 30.0
 _HTTP_READ_TIMEOUT_S = 300.0
 
+# Discovery bounds (R36): a hostile or buggy upstream cannot make `list_tools`
+# page forever or return an unbounded catalog.
+MAX_TOOL_PAGES = 20
+MAX_TOOLS = 1000
+
+# Per-request HTTP-status capture (R35). The recorder appends to the sink in
+# the current call's context, so concurrent `list_tools`/`call_tool` calls on
+# one session never drain or misattribute each other's 401/403/429/5xx codes.
+_status_ctx: contextvars.ContextVar[list[int] | None] = contextvars.ContextVar(
+    "cam_upstream_statuses", default=None
+)
+
 
 def _default_timeout() -> httpx2.Timeout:
     return httpx2.Timeout(_HTTP_CONNECT_TIMEOUT_S, read=_HTTP_READ_TIMEOUT_S)
 
 
-def _status_recorder(statuses: list[int]) -> Callable[[httpx2.Response], Any]:
+def _status_recorder(fallback: list[int]) -> Callable[[httpx2.Response], Any]:
     async def record(response: httpx2.Response) -> None:
-        statuses.append(response.status_code)
+        sink = _status_ctx.get()
+        (sink if sink is not None else fallback).append(response.status_code)
 
     return record
+
+
+@contextlib.contextmanager
+def _capture_statuses(fallback: list[int]) -> Generator[list[int]]:
+    """Route this call's HTTP statuses to a fresh per-call sink."""
+    del fallback  # kept for signature symmetry with the recorder's fallback
+    sink: list[int] = []
+    token = _status_ctx.set(sink)
+    try:
+        yield sink
+    finally:
+        _status_ctx.reset(token)
 
 
 def _make_http_client(
@@ -145,7 +173,9 @@ class UpstreamSession:
         try:
             self._pinned = await validate_outbound_url(self._target.url, policy=policy)
         except UrlPolicyError as exc:
-            raise UpstreamUnavailableError(f"URL policy rejected destination: {exc}") from exc
+            raise UpstreamUnavailableError(
+                f"URL policy rejected destination: {redact(str(exc))}"
+            ) from exc
 
     async def start(self, *, timeout_s: float | None = None) -> None:
         if self._client is not None or self._owner is not None:
@@ -173,9 +203,16 @@ class UpstreamSession:
                 "legacy establish timed out for %s (%s); retrying once in auto "
                 "mode without the GET SSE channel",
                 self._target.service_id,
-                first_error.message or "no detail",
+                redact(first_error.message or "no detail"),
             )
-            await self._establish(connect_timeout, stream_channel=False)
+            try:
+                await self._establish(connect_timeout, stream_channel=False)
+            except UpstreamError as fallback_error:
+                # The mode fallback already spent the one reconnect allowed for
+                # this establish; tell the pool not to run its own retry too, or
+                # a single logical connect becomes up to four attempts (R35).
+                fallback_error.retries_exhausted = True
+                raise
         self.touch()
 
     async def _establish(self, connect_timeout: float, *, stream_channel: bool) -> None:
@@ -190,7 +227,14 @@ class UpstreamSession:
             self._run(connect_timeout, stream_channel),
             name=f"cam-upstream:{self._target.service_id}",
         )
-        await self._ready.wait()
+        try:
+            await self._ready.wait()
+        except BaseException:
+            # Cancelled (or otherwise interrupted) while waiting for the owner
+            # to finish starting: tear the owner task down so it cannot outlive
+            # this call still holding a transport/half-open connection (R35).
+            await self._abort_owner()
+            raise
         if self._start_error is not None:
             error = self._start_error
             self._start_error = None
@@ -200,30 +244,37 @@ class UpstreamSession:
     async def list_tools(self, *, timeout_s: float | None = None) -> list[UpstreamTool]:
         client = self._require_client()
         budget = timeout_s if timeout_s is not None else self._call_timeout_s
-        self._statuses.clear()
         self._in_flight += 1
         try:
-            tools: list[UpstreamTool] = []
-            cursor: str | None = None
-            async with asyncio.timeout(budget):
-                while True:
-                    page = await client.list_tools(cursor=cursor, cache_mode="bypass")
-                    for tool in page.tools:
-                        tools.append(
-                            UpstreamTool(
-                                name=tool.name,
-                                description=tool.description or "",
-                                input_schema=dict(tool.input_schema),
-                            )
-                        )
-                    cursor = page.next_cursor
-                    if not cursor:
-                        break
-            self.touch()
-            return tools
-        except BaseException as exc:
-            self._raise_mapped(exc)
-            raise  # unreachable; _raise_mapped always raises
+            with _capture_statuses(self._statuses) as statuses:
+                try:
+                    tools: list[UpstreamTool] = []
+                    cursor: str | None = None
+                    pages = 0
+                    async with asyncio.timeout(budget):
+                        while True:
+                            page = await client.list_tools(cursor=cursor, cache_mode="bypass")
+                            pages += 1
+                            for tool in page.tools:
+                                tools.append(
+                                    UpstreamTool(
+                                        name=tool.name,
+                                        description=tool.description or "",
+                                        input_schema=dict(tool.input_schema),
+                                    )
+                                )
+                            if pages > MAX_TOOL_PAGES or len(tools) > MAX_TOOLS:
+                                raise UpstreamRemoteError(
+                                    "upstream tool catalog exceeded CAM discovery limits"
+                                )
+                            cursor = page.next_cursor
+                            if not cursor:
+                                break
+                    self.touch()
+                    return tools
+                except BaseException as exc:
+                    self._raise_mapped(exc, statuses)
+                    raise  # unreachable; _raise_mapped always raises
         finally:
             self._in_flight -= 1
 
@@ -236,16 +287,19 @@ class UpstreamSession:
     ) -> ToolCallOutcome:
         client = self._require_client()
         budget = timeout_s if timeout_s is not None else self._call_timeout_s
-        self._statuses.clear()
         self._in_flight += 1
         try:
-            async with asyncio.timeout(budget):
-                result = await client.call_tool(name, arguments, read_timeout_seconds=budget)
-            self.touch()
-            return normalize_call_result(result)
-        except BaseException as exc:
-            self._raise_mapped(exc)
-            raise  # unreachable; _raise_mapped always raises
+            with _capture_statuses(self._statuses) as statuses:
+                try:
+                    async with asyncio.timeout(budget):
+                        result = await client.call_tool(
+                            name, arguments, read_timeout_seconds=budget
+                        )
+                    self.touch()
+                    return normalize_call_result(result)
+                except BaseException as exc:
+                    self._raise_mapped(exc, statuses)
+                    raise  # unreachable; _raise_mapped always raises
         finally:
             self._in_flight -= 1
 
@@ -294,6 +348,10 @@ class UpstreamSession:
                     self._target.service_id,
                 )
             ready.set()
+            # Establish statuses were only needed to classify a failed start;
+            # clear them so the session-wide fallback sink cannot grow for the
+            # life of a long-lived session (calls use per-call sinks, R35).
+            statuses.clear()
             await shutdown.wait()
         except BaseException as exc:
             if not ready.is_set():
@@ -305,7 +363,9 @@ class UpstreamSession:
             else:
                 # Post-start failure while waiting on shutdown (or cancel on abort).
                 if type(exc).__name__ not in {"CancelledError"}:
-                    logger.debug("upstream session owner failed", exc_info=exc)
+                    # str(exc) can embed the request URL with credential query
+                    # params; never log it raw (R04).
+                    logger.debug("upstream session owner failed: %s", redact(str(exc)))
                 self._closed = True
         finally:
             self._client = None
@@ -322,6 +382,26 @@ class UpstreamSession:
         if owner is None:
             return
         with contextlib.suppress(Exception):
+            await owner
+
+    async def _abort_owner(self) -> None:
+        """Cancel the in-flight owner task and wait for it to unwind (R35).
+
+        Used on the cancellation/interrupt path while `start()` is waiting for
+        `_ready`, so a cancelled establish never leaves a live transport or a
+        half-open upstream connection behind.
+        """
+        owner = self._owner
+        self._owner = None
+        self._client = None
+        self._closed = True
+        shutdown = self._shutdown
+        if shutdown is not None:
+            shutdown.set()
+        if owner is None:
+            return
+        owner.cancel()
+        with contextlib.suppress(BaseException):
             await owner
 
     def _build_transport(self, stack: AsyncExitStack, statuses: list[int]) -> Transport:
@@ -350,13 +430,18 @@ class UpstreamSession:
             raise RuntimeError("session is closed")
         return self._client
 
-    def _raise_mapped(self, exc: BaseException) -> None:
-        """Map `exc` to an `UpstreamError` and raise it (never returns)."""
+    def _raise_mapped(self, exc: BaseException, statuses: Sequence[int]) -> None:
+        """Map `exc` to an `UpstreamError` and raise it (never returns).
+
+        `statuses` holds only the HTTP status codes observed for *this* call,
+        so a concurrent call's 401/429/5xx can never be misattributed here
+        (R35).
+        """
         if isinstance(exc, UpstreamError):
             raise exc
         if type(exc).__name__ in {"CancelledError", "KeyboardInterrupt", "SystemExit"}:
             raise exc
-        error, dead = map_exception(exc, recent_statuses=_drain(self._statuses))
+        error, dead = map_exception(exc, recent_statuses=statuses)
         if dead:
             self._closed = True
         raise error from exc

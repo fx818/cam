@@ -36,6 +36,13 @@ def _text_note(cap_tokens: int) -> str:
     )
 
 
+def _dict_note(kept: int, total: int, cap_tokens: int) -> str:
+    return (
+        f"[CAM: response truncated — showing {kept} of {total} fields "
+        f"(~{cap_tokens} token cap). Narrow the request with filters or a limit.]"
+    )
+
+
 def _truncate_json_array(text: str, *, max_chars: int, cap_tokens: int) -> tuple[str, bool] | None:
     try:
         data: Any = json.loads(text)
@@ -98,3 +105,74 @@ def truncate_blocks(
         else:
             blocks.append(block)
     return tuple(blocks), truncated
+
+
+def text_chars(content: tuple[ContentBlock, ...]) -> int:
+    """Characters of *text* (not images) in a block tuple, for budget sharing."""
+    return sum(len(block.text) for block in content if isinstance(block, TextBlock))
+
+
+def truncate_structured(
+    value: Any, *, cap_tokens: int, max_chars: int | None = None
+) -> tuple[Any, bool]:
+    """Cap a structured (JSON) result under the response budget.
+
+    Returns ``(value, truncated)``. A value that already fits is returned
+    unchanged. A top-level list keeps whole leading items and a top-level object
+    keeps whole leading keys, so a truncated result stays valid JSON that matches
+    the truncated text blocks. When not even one element fits, a small marker
+    object (or ``None`` when there is no budget left) is returned so the field is
+    still valid, bounded JSON rather than raw uncapped data.
+
+    ``max_chars`` lets a caller share one budget with the text blocks: pass the
+    characters still available after ``truncate_blocks`` ran.
+    """
+    if value is None or cap_tokens < 1:
+        return value, False
+    budget = chars_for_tokens(cap_tokens) if max_chars is None else max_chars
+    try:
+        encoded = json.dumps(value, ensure_ascii=False, default=str)
+    except TypeError, ValueError:
+        return value, False
+    if len(encoded) <= budget:
+        return value, False
+    if budget <= 0:
+        return None, True
+    if isinstance(value, list):
+        items = cast("list[Any]", value)
+        kept: list[Any] = []
+        head_len = 2  # "[" + "]"
+        for item in items:
+            item_len = len(json.dumps(item, ensure_ascii=False, default=str))
+            # json's default item separator is ", " (2 chars).
+            candidate_len = head_len + (2 if kept else 0) + item_len
+            note = _array_note(len(kept) + 1, len(items), cap_tokens)
+            if candidate_len + 1 + len(note) > budget:
+                break
+            kept.append(item)
+            head_len = candidate_len
+        if kept:
+            return kept, True
+    elif isinstance(value, dict):
+        pairs = list(cast("dict[str, Any]", value).items())
+        kept_dict: dict[str, Any] = {}
+        head_len = 2  # "{" + "}"
+        for key, item in pairs:
+            # json's default separators are ", " between pairs and ": " inside.
+            pair_len = (
+                len(json.dumps(key, ensure_ascii=False, default=str))
+                + 2
+                + len(json.dumps(item, ensure_ascii=False, default=str))
+            )
+            candidate_len = head_len + (2 if kept_dict else 0) + pair_len
+            note = _dict_note(len(kept_dict) + 1, len(pairs), cap_tokens)
+            if candidate_len + 1 + len(note) > budget:
+                break
+            kept_dict[key] = item
+            head_len = candidate_len
+        if kept_dict:
+            return kept_dict, True
+    marker = {"_cam_truncated": True, "note": _text_note(cap_tokens)}
+    if len(json.dumps(marker, ensure_ascii=False)) > budget:
+        return None, True
+    return marker, True

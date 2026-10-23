@@ -12,6 +12,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { ApiError, apiFetch } from "@/lib/api"
+import { useIdentityKey } from "@/lib/auth"
 
 interface ReviewQueueEntry {
   id: string
@@ -36,12 +37,13 @@ interface ApproveResponse {
 
 export function AdminReviewQueuePage() {
   const queryClient = useQueryClient()
+  const identity = useIdentityKey()
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [message, setMessage] = useState<string | null>(null)
   const [failure, setFailure] = useState<string | null>(null)
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ["admin-review-queue"],
+    queryKey: ["admin-review-queue", identity],
     queryFn: () => apiFetch<ReviewQueueResponse>("/api/admin/review-queue"),
   })
 

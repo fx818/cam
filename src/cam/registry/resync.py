@@ -103,7 +103,11 @@ async def build_connection_target(
         db, org_id=service.org_id, restricted=service.tier == "personal"
     )
     headers: dict[str, str] = {}
-    if service.auth_type != "oauth" and connection.secret_enc is not None:
+    query: dict[str, str] = {}
+    # R11: resolve credentials for OAuth services too. OAuth tokens live on the
+    # connection like any other credential; contacting the upstream with empty
+    # headers meant OAuth (e.g. Notion) templates could never import/resync.
+    if service.auth_type == "oauth" or connection.secret_enc is not None:
         try:
             material = await resolve_credential(db, service=service, connection=connection)
         except CredentialExpiredError as exc:
@@ -114,8 +118,6 @@ async def build_connection_target(
             raise ResyncError(f"The {service.name} credential is unusable: {exc}") from exc
         headers = dict(material.headers)
         query = dict(material.query)
-    else:
-        query = {}
     url = url_with_credential_query(service.url, query)
     transport: Literal["streamable-http", "sse"] = (
         "streamable-http" if service.transport != "sse" else "sse"
@@ -209,7 +211,7 @@ async def _ref(db: AsyncSession, service: Service) -> str:
     handle: str | None = None
     if service.owner_user_id is not None:
         owner = await db.get(User, service.owner_user_id)
-        if owner is not None:
+        if owner is not None and owner.org_id == service.org_id:
             handle = owner.handle
     try:
         return service_ref(service, handle)
@@ -220,7 +222,13 @@ async def _ref(db: AsyncSession, service: Service) -> str:
 async def apply_diff(
     db: AsyncSession, service: Service, specs: list[UpstreamToolSpec]
 ) -> tuple[list[str], list[str], list[str]]:
-    rows = list((await db.execute(select(Tool).where(Tool.service_id == service.id))).scalars())
+    rows = list(
+        (
+            await db.execute(
+                select(Tool).where(Tool.org_id == service.org_id, Tool.service_id == service.id)
+            )
+        ).scalars()
+    )
     existing = {row.name: row for row in rows}
     spec_by_name = {spec.name: spec for spec in specs}
 
@@ -287,6 +295,7 @@ async def apply_diff(
         (
             await db.execute(
                 select(Tool).where(
+                    Tool.org_id == service.org_id,
                     Tool.service_id == service.id,
                     Tool.status == "pending_review",
                 )

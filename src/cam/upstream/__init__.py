@@ -11,6 +11,7 @@ from cam.upstream.errors import (
     UpstreamTimeoutError,
     UpstreamUnavailableError,
     map_exception,
+    redact,
 )
 from cam.upstream.normalize import normalize_call_result
 from cam.upstream.pool import SessionPool, pool_key
@@ -54,4 +55,5 @@ __all__ = [
     "map_exception",
     "normalize_call_result",
     "pool_key",
+    "redact",
 ]

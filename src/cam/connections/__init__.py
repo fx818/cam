@@ -18,6 +18,8 @@ from cam.connections.orgs import (
     decrypt_for_org,
     encrypt_for_org,
     ensure_org,
+    get_org,
+    get_org_by_id,
     get_org_by_slug,
     get_org_data_key,
 )
@@ -55,6 +57,8 @@ __all__ = [
     "generate_data_key",
     "generate_raw_token",
     "get_default_key_ring",
+    "get_org",
+    "get_org_by_id",
     "get_org_by_slug",
     "get_org_data_key",
     "hash_password",

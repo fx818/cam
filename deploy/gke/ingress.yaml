@@ -20,6 +20,9 @@ spec:
     - host: cam.CHANGE_ME.internal
       http:
         paths:
+          # The unauthenticated /api/metrics route is deliberately NOT granted
+          # by this Prefix: a separate cam-metrics Ingress (ingress-metrics.yaml)
+          # matches it more specifically and restricts it (R29).
           - path: /
             pathType: Prefix
             backend:

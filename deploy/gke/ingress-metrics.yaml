@@ -1,0 +1,28 @@
+# Restricts the unauthenticated /api/metrics route to the monitoring network
+# (R29). This Ingress matches /api/metrics with pathType Exact, which is more
+# specific than the Prefix `/` in ingress.yaml, so ingress-nginx applies the
+# allow/deny below to that location while the rest of the site stays public.
+# Set whitelist-source-range to the Prometheus scraper's source range (the
+# example is an RFC1918 block).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: cam-metrics
+  namespace: cam
+  labels:
+    app.kubernetes.io/name: cam
+  annotations:
+    nginx.ingress.kubernetes.io/whitelist-source-range: "10.0.0.0/8"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: cam.CHANGE_ME.internal
+      http:
+        paths:
+          - path: /api/metrics
+            pathType: Exact
+            backend:
+              service:
+                name: cam
+                port:
+                  name: http

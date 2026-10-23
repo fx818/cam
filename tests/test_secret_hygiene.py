@@ -115,7 +115,7 @@ def test_token_stores_only_hash_and_short_prefix() -> None:
     assert raw.startswith(TOKEN_PREFIX)
     prefix = extract_token_prefix(raw)
     assert len(prefix) == TOKEN_VISIBLE_PREFIX_LENGTH
-    assert prefix not in raw[len(TOKEN_PREFIX) : TOKEN_VISIBLE_PREFIX_LENGTH + 5] or True
+    assert raw.startswith(TOKEN_PREFIX + prefix)
     assert hash_token(raw) != raw
     assert len(hash_token(raw)) == 64
 

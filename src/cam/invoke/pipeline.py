@@ -15,6 +15,7 @@ from dataclasses import dataclass, replace
 from typing import Any, cast
 from uuid import UUID
 
+from prometheus_client import Counter
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from cam.access import (
@@ -30,6 +31,7 @@ from cam.access import (
     tool_ref,
 )
 from cam.access.credentials import CredentialError, CredentialExpiredError, resolve_credential
+from cam.api.metrics import REGISTRY, record_invoke_outcome
 from cam.audit.writer import AuditEvent, AuditRef, AuditWriter
 from cam.config import Settings
 from cam.connections.tokens import AuthenticatedIdentity
@@ -46,7 +48,13 @@ from cam.invoke.errors import (
     service_disabled,
 )
 from cam.invoke.rate_limit import RateLimiter
-from cam.invoke.truncation import truncate_blocks
+from cam.invoke.truncation import (
+    chars_for_tokens,
+    text_chars,
+    truncate_blocks,
+    truncate_structured,
+    truncate_text,
+)
 from cam.invoke.validation import validate_args
 from cam.jobs.health import record_invoke_health
 from cam.skills import actions as skill_actions
@@ -57,6 +65,27 @@ from cam.upstream.types import ConnectionTarget, ContentBlock, TextBlock, ToolCa
 from cam.upstream.url import UrlPolicy, url_with_credential_query
 
 logger = logging.getLogger(__name__)
+
+# Invoke health writes are dashboard bookkeeping; when one fails we record it
+# here rather than failing the call (see `_record_invoke_health_safe`).
+HEALTH_WRITE_FAILED = Counter(
+    "cam_invoke_health_write_failed_total",
+    "Invoke health updates that could not be persisted (dashboard badge may be stale)",
+    registry=REGISTRY,
+)
+
+# Audit events the writer refused to enqueue (queue full or writer closed). The
+# writer already counts queue-full drops; this counts the pipeline-level misses
+# it reports back through `AuditWriter.record`'s return value.
+AUDIT_RECORD_REJECTED = Counter(
+    "cam_invoke_audit_record_rejected_total",
+    "Invoke audit events the writer refused to enqueue (queue full or writer closed)",
+    registry=REGISTRY,
+)
+
+# Slack kept aside so a capped error envelope (code/service/message plus JSON
+# punctuation) still fits under the response budget after its message is cut.
+_ERROR_ENVELOPE_OVERHEAD = 256
 
 SKILL_ACTIONS = frozenset({"list_skills", "load_skill", "read_skill_file"})
 CAM_ACTIONS = frozenset({"list_services", "list_tools", "describe", "invoke", *SKILL_ACTIONS})
@@ -217,6 +246,39 @@ async def _describe(deps: GatewayDeps, identity: AuthenticatedIdentity, tool_id:
     )
 
 
+async def _record_invoke_health_safe(
+    deps: GatewayDeps,
+    *,
+    service_id: UUID,
+    connection_id: UUID,
+    ok: bool,
+    error_code: str | None,
+) -> None:
+    """Record invoke-driven health without ever failing the call.
+
+    A health write only refreshes a dashboard badge. A database error here must
+    not turn a dispatch that already happened into a retryable ``INTERNAL`` error
+    — the agent would retry and duplicate the upstream side effect. Failures are
+    logged and counted instead; the real upstream outcome is preserved.
+    """
+    try:
+        await record_invoke_health(
+            deps.session_factory,
+            service_id=service_id,
+            connection_id=connection_id,
+            ok=ok,
+            error_code=error_code,
+        )
+    except Exception:
+        HEALTH_WRITE_FAILED.inc()
+        logger.warning(
+            "could not record invoke health for service %s (connection %s)",
+            service_id,
+            connection_id,
+            exc_info=True,
+        )
+
+
 async def _invoke(
     deps: GatewayDeps,
     identity: AuthenticatedIdentity,
@@ -243,6 +305,7 @@ async def _invoke(
             service_id=resolved.service.id,
             connection_id=connection.id,
             tool_name=resolved.tool.name,
+            owner_user_id=connection.user_id or resolved.service.owner_user_id,
         )
         try:
             credential = await resolve_credential(
@@ -265,8 +328,8 @@ async def _invoke(
                     f"The {resolved.service.name} connection has expired. "
                     "An admin needs to reconnect it in the CAM dashboard."
                 )
-            await record_invoke_health(
-                deps.session_factory,
+            await _record_invoke_health_safe(
+                deps,
                 service_id=resolved.service.id,
                 connection_id=connection.id,
                 ok=False,
@@ -279,8 +342,8 @@ async def _invoke(
                 audit_ref=audit_ref,
             ) from exc
         except CredentialError as exc:
-            await record_invoke_health(
-                deps.session_factory,
+            await _record_invoke_health_safe(
+                deps,
                 service_id=resolved.service.id,
                 connection_id=connection.id,
                 ok=False,
@@ -331,8 +394,8 @@ async def _invoke(
         cam_error = map_upstream_error(
             exc, service_ref=ref, service_name=service.name, audit_ref=audit_ref
         )
-        await record_invoke_health(
-            deps.session_factory,
+        await _record_invoke_health_safe(
+            deps,
             service_id=service.id,
             connection_id=connection.id,
             ok=False,
@@ -343,12 +406,17 @@ async def _invoke(
         upstream_text = "".join(
             block.text for block in outcome.content if isinstance(block, TextBlock)
         )
-        await record_invoke_health(
-            deps.session_factory,
+        await _record_invoke_health_safe(
+            deps,
             service_id=service.id,
             connection_id=connection.id,
             ok=False,
             error_code="UPSTREAM_ERROR",
+        )
+        cap_tokens = service.response_cap_tokens
+        error_budget = max(chars_for_tokens(cap_tokens) - _ERROR_ENVELOPE_OVERHEAD, 0)
+        upstream_text, _ = truncate_text(
+            upstream_text, max_chars=error_budget, cap_tokens=cap_tokens
         )
         raise CamError(
             CamErrorCode.UPSTREAM_ERROR,
@@ -356,19 +424,25 @@ async def _invoke(
             service=ref,
             audit_ref=audit_ref,
         )
-    await record_invoke_health(
-        deps.session_factory,
+    await _record_invoke_health_safe(
+        deps,
         service_id=service.id,
         connection_id=connection.id,
         ok=True,
         error_code=None,
     )
-    content, truncated = truncate_blocks(outcome.content, service.response_cap_tokens)
+    cap_tokens = service.response_cap_tokens
+    content, truncated = truncate_blocks(outcome.content, cap_tokens)
+    structured, structured_truncated = truncate_structured(
+        outcome.structured,
+        cap_tokens=cap_tokens,
+        max_chars=max(chars_for_tokens(cap_tokens) - text_chars(content), 0),
+    )
     return CamResult(
         content=content,
-        structured=outcome.structured,
+        structured=structured,
         is_error=False,
-        truncated=truncated,
+        truncated=truncated or structured_truncated,
         audit_ref=audit_ref,
     )
 
@@ -527,6 +601,16 @@ async def handle(
     else:
         result = outcome if isinstance(outcome, CamResult) else payload_result(outcome)
 
+    # Error envelopes bypass the invoke-path cap, and an upstream error message
+    # can be unbounded. Cap every error result under the default budget so no
+    # response leaves CAM larger than the configured cap.
+    if result.is_error and not result.truncated:
+        capped_content, cut = truncate_blocks(
+            result.content, deps.settings.default_response_cap_tokens
+        )
+        if cut:
+            result = replace(result, content=capped_content, truncated=True)
+
     latency_ms = int((time.monotonic() - started) * 1000)
     response_bytes = sum(
         len(block.text.encode("utf-8")) if isinstance(block, TextBlock) else len(block.data)
@@ -548,5 +632,20 @@ async def handle(
         response_bytes=response_bytes,
         truncated=result.truncated,
     ).from_ref(audit_ref)
-    deps.audit.record(event)
+    if not deps.audit.record(event):
+        # The writer refused the event (queue full or writer closed). The call
+        # itself succeeded; surface the loss instead of silently dropping it.
+        AUDIT_RECORD_REJECTED.inc()
+        logger.warning(
+            "audit event not recorded (writer closed or queue full): action=%s status=%s",
+            event.action,
+            event.status,
+        )
+    # R28: expose tool-level outcomes at the pipeline boundary — the MCP call
+    # itself returns HTTP 200 even for failures, so HTTP-status alerts miss them.
+    record_invoke_outcome(
+        event.action,
+        is_error=result.is_error,
+        error_code=str(cam_error.code) if cam_error is not None else None,
+    )
     return result

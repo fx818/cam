@@ -6,23 +6,25 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any, Literal
 
-from sqlalchemy import String, and_, func, or_, select, update
+from sqlalchemy import String, and_, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cam.access.resolution import GLOBAL_OWNER, ServiceNotFound, has_access, list_services
 from cam.access.shares import ShareError, add_share, list_shares, revoke_share
 from cam.accounts.users import UserError, get_user_by_email
 from cam.api.deps import SessionIdentity
+from cam.api.errors import ApiProblem
 from cam.api.pagination import decode_cursor, encode_cursor
+from cam.api.settings_resolver import org_effective_from_settings
 from cam.connections.tokens import AuthenticatedIdentity, create_token
 from cam.connections.url_policy import AllowlistError, normalize_pattern
 from cam.db.models import (
     AuditLog,
     CamToken,
     Connection,
+    OAuthState,
     Org,
     Service,
-    ServiceVisibility,
     Share,
     Tool,
     UrlAllowlist,
@@ -233,16 +235,10 @@ async def list_dashboard_services(
         )
     ).all()
     for service, tool_count in template_rows:
-        if service.visibility != "all":
-            grant = await session.execute(
-                select(ServiceVisibility.id).where(
-                    ServiceVisibility.org_id == identity.org_id,
-                    ServiceVisibility.service_id == service.id,
-                    ServiceVisibility.user_id == identity.user.id,
-                )
-            )
-            if grant.first() is None:
-                continue
+        # Visibility is decided by the single access module (access/), never
+        # re-implemented here.
+        if not await has_access(session, viewer, service):
+            continue
         connection = connections.get(("template", service.slug))
         entries.append(
             {
@@ -335,15 +331,32 @@ async def viewer_connection(
     return result.scalar_one_or_none()
 
 
+def _as_patch_int(value: Any, field: str) -> int:
+    if value is None:
+        raise ValueError(f"{field} may not be null")
+    try:
+        return int(value)
+    except TypeError, ValueError:
+        raise ValueError(f"{field} must be an integer") from None
+
+
 def apply_service_patch(service: Service, updates: dict[str, Any]) -> Service:
+    # `exclude_unset=True` keeps explicit JSON nulls; every patchable field on
+    # a service is non-nullable, so reject null with a 422 instead of storing
+    # the string "None" or raising an uncaught TypeError.
+    for field in ("name", "description", "timeout_ms", "response_cap_tokens", "status"):
+        if field in updates and updates[field] is None:
+            raise ValueError(f"{field} may not be null")
     if "name" in updates:
         service.name = str(updates["name"]).strip()
     if "description" in updates:
         service.description = str(updates["description"])
     if "timeout_ms" in updates:
-        service.timeout_ms = int(updates["timeout_ms"])
+        service.timeout_ms = _as_patch_int(updates["timeout_ms"], "timeout_ms")
     if "response_cap_tokens" in updates:
-        service.response_cap_tokens = int(updates["response_cap_tokens"])
+        service.response_cap_tokens = _as_patch_int(
+            updates["response_cap_tokens"], "response_cap_tokens"
+        )
     if "status" in updates:
         status = str(updates["status"])
         if status not in ("active", "disabled"):
@@ -355,6 +368,8 @@ def apply_service_patch(service: Service, updates: dict[str, Any]) -> Service:
 async def soft_delete_service(session: AsyncSession, service: Service) -> None:
     now = datetime.now(UTC)
     service.status = "deleted"
+    # Clear the service-level credential (e.g. the OAuth client secret) as well.
+    service.auth_secret_enc = None
     connections = list(
         (
             await session.execute(select(Connection).where(Connection.service_id == service.id))
@@ -370,6 +385,9 @@ async def soft_delete_service(session: AsyncSession, service: Service) -> None:
             .where(Share.connection_id == connection.id, Share.revoked_at.is_(None))
             .values(revoked_at=now)
         )
+    # Revoke outstanding OAuth authorizations for this service (pending states
+    # have no revoked flag, so remove them outright in the same transaction).
+    await session.execute(delete(OAuthState).where(OAuthState.service_id == service.id))
     await session.flush()
 
 
@@ -426,6 +444,17 @@ def apply_tool_patch(tool: Tool, updates: dict[str, Any]) -> Tool:
     return tool
 
 
+def _decode_ts_id_cursor(cursor: str) -> tuple[datetime, uuid.UUID]:
+    """Decode a ``(timestamp, uuid)`` keyset cursor, translating bad payloads."""
+    parts = decode_cursor(cursor, count=2)
+    if parts is None:
+        raise ApiProblem("VALIDATION_ERROR", "invalid cursor", 422)
+    try:
+        return datetime.fromisoformat(parts[0]), uuid.UUID(parts[1])
+    except TypeError, ValueError:
+        raise ApiProblem("VALIDATION_ERROR", "invalid cursor", 422) from None
+
+
 async def list_user_tokens(
     session: AsyncSession, identity: SessionIdentity, *, limit: int, cursor: str | None
 ) -> tuple[list[CamToken], str | None]:
@@ -435,10 +464,7 @@ async def list_user_tokens(
         .order_by(CamToken.created_at.desc(), CamToken.id.desc())
     )
     if cursor:
-        parts = decode_cursor(cursor, count=2)
-        assert parts is not None
-        created = datetime.fromisoformat(parts[0])
-        token_id = uuid.UUID(parts[1])
+        created, token_id = _decode_ts_id_cursor(cursor)
         stmt = stmt.where(
             or_(
                 CamToken.created_at < created,
@@ -696,10 +722,7 @@ async def list_audit_entries(
         stmt = stmt.where(AuditLog.ts < end)
     stmt = apply_audit_filters(stmt, filters)
     if cursor:
-        parts = decode_cursor(cursor, count=2)
-        assert parts is not None
-        ts = datetime.fromisoformat(parts[0])
-        entry_id = uuid.UUID(parts[1])
+        ts, entry_id = _decode_ts_id_cursor(cursor)
         stmt = stmt.where(
             or_(
                 AuditLog.ts < ts,
@@ -928,14 +951,62 @@ async def admin_overview_stats(session: AsyncSession, identity: SessionIdentity)
     }
 
 
+# Platform defaults used when the org has not set a value (see config.Settings).
+DEFAULT_TIMEOUT_S = 60
+DEFAULT_RESPONSE_CAP_TOKENS = 50000
+DEFAULT_LOG_RETENTION_DAYS = 30
+
+# Legacy orgs.settings keys superseded by the canonical names the gateway,
+# resolver and jobs read ("align setting names" — R23).
+_LEGACY_SETTING_KEYS = ("instructions", "default_timeout_ms", "response_cap_tokens")
+
+
+def _migrate_legacy_settings(settings: dict[str, Any]) -> dict[str, Any]:
+    """Copy any legacy key onto its canonical name (idempotent, in place)."""
+    if "server_instructions" not in settings and "instructions" in settings:
+        settings["server_instructions"] = settings["instructions"]
+    legacy_timeout = settings.get("default_timeout_ms")
+    if (
+        "default_timeout_s" not in settings
+        and isinstance(legacy_timeout, int)
+        and not isinstance(legacy_timeout, bool)
+    ):
+        settings["default_timeout_s"] = max(1, legacy_timeout // 1000)
+    if "default_response_cap_tokens" not in settings and "response_cap_tokens" in settings:
+        settings["default_response_cap_tokens"] = settings["response_cap_tokens"]
+    return settings
+
+
+def _canonical_settings_updates(updates: dict[str, Any]) -> dict[str, Any]:
+    """Translate admin-settings API fields onto canonical orgs.settings keys."""
+    canonical: dict[str, Any] = dict(updates)
+    if "default_timeout_ms" in canonical:
+        timeout_ms = canonical.pop("default_timeout_ms")
+        if timeout_ms is not None:
+            canonical["default_timeout_s"] = max(1, int(timeout_ms) // 1000)
+    if "response_cap_tokens" in canonical:
+        canonical["default_response_cap_tokens"] = canonical.pop("response_cap_tokens")
+    if "server_instructions" not in canonical and "instructions" in canonical:
+        canonical["server_instructions"] = canonical["instructions"]
+    canonical.pop("instructions", None)
+    return canonical
+
+
 def org_settings_public(org: Org) -> dict[str, Any]:
     settings = org.settings or {}
+    effective = org_effective_from_settings(settings)
+    timeout_s = effective.default_timeout_s or DEFAULT_TIMEOUT_S
+    cap = effective.default_response_cap_tokens or DEFAULT_RESPONSE_CAP_TOKENS
+    retention = effective.log_retention_days or DEFAULT_LOG_RETENTION_DAYS
+    instructions = effective.server_instructions or ""
     return {
-        "default_timeout_ms": int(settings.get("default_timeout_ms", 60000)),
-        "response_cap_tokens": int(settings.get("response_cap_tokens", 50000)),
-        "log_retention_days": int(settings.get("log_retention_days", 30)),
+        "default_timeout_ms": int(timeout_s) * 1000,
+        "response_cap_tokens": int(cap),
+        "log_retention_days": int(retention),
         "allowed_email_domains": list(settings.get("allowed_email_domains", [])),
-        "instructions": str(settings.get("instructions", "")),
+        "server_instructions": instructions,
+        # Deprecated alias kept for the current dashboard form.
+        "instructions": instructions,
         "brand": dict(settings.get("brand") or {}),
     }
 
@@ -945,8 +1016,10 @@ async def update_org_settings(
 ) -> dict[str, Any]:
     org = await session.get(Org, identity.org_id)
     assert org is not None
-    merged = dict(org.settings or {})
-    merged.update(updates)
+    merged = _migrate_legacy_settings(dict(org.settings or {}))
+    merged.update(_canonical_settings_updates(updates))
+    for legacy in _LEGACY_SETTING_KEYS:
+        merged.pop(legacy, None)
     org.settings = merged
     await session.flush()
     return org_settings_public(org)

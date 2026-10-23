@@ -64,6 +64,42 @@ def _as_mapping(node: Any) -> Mapping[str, Any] | None:
     return None
 
 
+def _first_external_ref(node: Any) -> str | None:
+    """Return the first ``$ref`` that is not a local ``#/`` fragment, if any.
+
+    Imported specs must not carry references CAM would later resolve outside the
+    document: an ``http(s)://`` reference is an SSRF / request-path fetch and a
+    ``file://`` (or bare path) reference is a local-file read. OpenAPI's own
+    validator reads ``file://`` refs, so this check runs before it.
+    """
+    items = _as_list(node)
+    if items is not None:
+        for item in items:
+            found = _first_external_ref(item)
+            if found is not None:
+                return found
+        return None
+    mapping = _as_mapping(node)
+    if mapping is None:
+        return None
+    ref = mapping.get("$ref")
+    if isinstance(ref, str) and not ref.startswith("#/"):
+        return ref
+    for value in mapping.values():
+        found = _first_external_ref(value)
+        if found is not None:
+            return found
+    return None
+
+
+def _reject_external_refs(spec: Mapping[str, Any]) -> None:
+    ref = _first_external_ref(spec)
+    if ref is not None:
+        raise OpenAPIError(
+            f"spec contains a non-local reference {ref!r}; only local '#/' references are allowed"
+        )
+
+
 def _resolve_refs(node: Any, spec: Mapping[str, Any], seen: frozenset[str]) -> Any:
     items = _as_list(node)
     if items is not None:
@@ -73,7 +109,9 @@ def _resolve_refs(node: Any, spec: Mapping[str, Any], seen: frozenset[str]) -> A
         return node
     ref = mapping.get("$ref")
     if isinstance(ref, str):
-        if ref in seen or not ref.startswith("#/"):
+        if not ref.startswith("#/"):
+            raise OpenAPIError(f"external reference {ref!r} is not allowed")
+        if ref in seen:
             return {"$ref": ref}
         target: Any = spec
         for part in ref[2:].split("/"):
@@ -221,6 +259,7 @@ def _as_param_list(raw: Any) -> list[Mapping[str, Any]]:
 
 
 def parse_operations(spec: Mapping[str, Any]) -> list[SpecOperation]:
+    _reject_external_refs(spec)
     resolved = _deref(spec)
     paths = _as_mapping(resolved.get("paths"))
     if paths is None:
@@ -287,6 +326,7 @@ def _parse_json_spec(text: str) -> dict[str, Any]:
 
 
 def _validate(spec: dict[str, Any]) -> None:
+    _reject_external_refs(spec)
     try:
         validate_openapi(spec)
     except Exception as exc:

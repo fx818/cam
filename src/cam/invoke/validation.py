@@ -3,6 +3,18 @@
 Runs after access resolution so a caller only ever sees validation for tools
 they may reach. A broken stored schema never blocks the call: pass-through
 wins over failing closed on metadata we cannot parse.
+
+Reference safety
+----------------
+jsonschema's default registry resolves any ``$ref`` it does not already hold
+with a *synchronous* ``urllib`` fetch, so a stored tool schema carrying an
+``http(s)://`` or ``file://`` reference could make CAM read the network or the
+filesystem from inside the request path (SSRF + event-loop block). We always
+pass an explicit registry whose ``retrieve`` refuses every external fetch, so
+only references already present in the schema in hand (``#/...`` fragments,
+``$defs`` and the standard ``$schema`` meta schemas) resolve. A schema that
+needs any other reference is rejected by the registry and treated like any
+unparseable schema: log and skip.
 """
 
 from __future__ import annotations
@@ -10,12 +22,31 @@ from __future__ import annotations
 import logging
 from typing import Any, cast
 
+import referencing
+import referencing.jsonschema
 from jsonschema import exceptions as jsonschema_exceptions
 from jsonschema import validate as jsonschema_validate
+from referencing.exceptions import NoSuchResource
 
 from cam.invoke.errors import invalid_args
 
 logger = logging.getLogger(__name__)
+
+
+def _reject_external_retrieval(uri: str) -> referencing.jsonschema.SchemaResource:
+    """Refuse to resolve any reference the local schema does not already provide.
+
+    Raising here stops jsonschema from ever calling ``urllib.request.urlopen``
+    (remote) or reading a ``file://`` path for an attacker-supplied ``$ref``.
+    """
+    raise NoSuchResource(ref=uri)
+
+
+# A registry that owns no resources of its own. Any ``$ref`` the schema in hand
+# does not already provide raises ``NoSuchResource`` instead of being fetched.
+LOCAL_ONLY_REGISTRY: referencing.jsonschema.SchemaRegistry = referencing.Registry(
+    retrieve=_reject_external_retrieval
+)
 
 
 def _expected_fragment(exc: jsonschema_exceptions.ValidationError) -> str | None:
@@ -42,7 +73,7 @@ def validate_args(schema: dict[str, Any] | None, args: dict[str, Any]) -> None:
     if not schema:
         return
     try:
-        jsonschema_validate(args, schema)
+        jsonschema_validate(args, schema, registry=LOCAL_ONLY_REGISTRY)
     except jsonschema_exceptions.ValidationError as exc:
         path = ".".join(str(part) for part in exc.absolute_path) or "(root)"
         fragment = _expected_fragment(exc)

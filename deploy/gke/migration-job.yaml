@@ -15,6 +15,34 @@ spec:
     spec:
       serviceAccountName: cam
       restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+      initContainers:
+        # Cloud SQL proxy as a NATIVE SIDECAR (Kubernetes 1.29+): an init
+        # container with restartPolicy: Always starts before the migrate
+        # container and is terminated when it exits, so the Job reaches
+        # Complete. As a plain container it never exits and the Job hangs
+        # forever (N4/R30).
+        - name: cloud-sql-proxy
+          image: us-docker.pkg.dev/cloud-sql-containers/cloud-sql-proxy:2.11.4
+          restartPolicy: Always
+          args:
+            - "--private-ip"
+            - "$(CLOUD_SQL_INSTANCE)"
+          env:
+            - name: CLOUD_SQL_INSTANCE
+              value: "PROJECT:REGION:REPLACE_INSTANCE_NAME"
+          securityContext:
+            runAsNonRoot: true
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
       containers:
         - name: migrate
           image: REGION-docker.pkg.dev/PROJECT/REPO/cam:SET_TAG_AT_DEPLOY
@@ -48,6 +76,13 @@ spec:
                   key: CAM_DATABASE_URL
             - name: CAM_JOBS_ENABLED
               value: "false"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
           resources:
             requests:
               cpu: 100m

@@ -12,10 +12,14 @@ from cam.api.deps import (
     set_auth_cookies,
 )
 from cam.api.errors import ApiProblem
-from cam.auth.lockout import locked_until, record_attempt
-from cam.auth.sessions import issue_session, new_csrf_token
+from cam.auth.lockout import admit_attempt, record_attempt
+from cam.auth.sessions import (
+    invalidate_user_sessions,
+    issue_session,
+    new_csrf_token,
+)
 from cam.connections.orgs import ensure_org
-from cam.db.models import Org
+from cam.db.models import Org, User
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -36,7 +40,9 @@ async def login(body: LoginBody, request: Request, response: Response) -> dict[s
         await ensure_org(db)
         await db.commit()
     async with session_factory() as db:
-        lock = await locked_until(db, email=email, ip=ip)
+        # Atomic admission gate: SQL-side targeted counts under an advisory
+        # lock, taken before the expensive password verification.
+        lock = await admit_attempt(db, email=email, ip=ip)
         if lock is not None:
             raise ApiProblem(
                 "RATE_LIMITED",
@@ -59,7 +65,12 @@ async def login(body: LoginBody, request: Request, response: Response) -> dict[s
         org = await db.get(Org, user.org_id)
         if org is None:
             raise ApiProblem("INTERNAL", "Org not found.", 500)
-        session_value = issue_session(settings.session_secret, user_id=user.id, org_id=user.org_id)
+        session_value = issue_session(
+            settings.session_secret,
+            user_id=user.id,
+            org_id=user.org_id,
+            version=user.session_version or 0,
+        )
         csrf_token = new_csrf_token()
         await db.commit()
     set_auth_cookies(response, request, session_value, csrf_token)
@@ -68,6 +79,16 @@ async def login(body: LoginBody, request: Request, response: Response) -> dict[s
 
 @router.post("/logout")
 async def logout(request: Request, response: Response) -> dict[str, bool]:
+    # Revoke the session server-side (not just clearing the cookie) so a stolen
+    # cookie is useless after logout.
+    identity = await load_identity(request, response)
+    if identity is not None:
+        session_factory = request.app.state.session_factory
+        async with session_factory() as db:
+            user = await db.get(User, identity.user.id)
+            if user is not None:
+                await invalidate_user_sessions(db, user)
+                await db.commit()
     clear_session_cookies(response, request)
     return {"ok": True}
 

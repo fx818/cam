@@ -29,7 +29,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { ApiError, apiFetch } from "@/lib/api"
-import { useAuth } from "@/lib/auth"
+import { useAuth, useIdentityKey } from "@/lib/auth"
 import type { TokenRow, TokensResponse } from "@/lib/types"
 
 function CopyRow({ label, value }: { label: string; value: string }) {
@@ -58,6 +58,7 @@ function CopyRow({ label, value }: { label: string; value: string }) {
 
 export function AgentSetupPage() {
   const { baseUrl } = useAuth()
+  const identity = useIdentityKey()
   const queryClient = useQueryClient()
   const [createOpen, setCreateOpen] = useState(false)
   const [label, setLabel] = useState("")
@@ -66,7 +67,7 @@ export function AgentSetupPage() {
   const [revokeTarget, setRevokeTarget] = useState<TokenRow | null>(null)
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ["tokens"],
+    queryKey: ["tokens", identity],
     queryFn: () => apiFetch<TokensResponse>("/api/tokens"),
   })
 

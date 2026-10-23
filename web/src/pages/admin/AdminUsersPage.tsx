@@ -30,6 +30,7 @@ import {
 } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ApiError, apiFetch } from "@/lib/api"
+import { useIdentityKey } from "@/lib/auth"
 import type {
   AdminUser,
   AdminUsersResponse,
@@ -50,14 +51,15 @@ function UserDetailDialog({
   open: boolean
   onOpenChange: (open: boolean) => void
 }) {
+  const identity = useIdentityKey()
   const tokens = useQuery({
-    queryKey: ["admin-user-tokens", user?.id],
+    queryKey: ["admin-user-tokens", user?.id, identity],
     enabled: open && user !== null,
     queryFn: () =>
       apiFetch<{ tokens: TokenRow[] }>(`/api/admin/users/${user?.id}/tokens`),
   })
   const activity = useQuery({
-    queryKey: ["admin-user-activity", user?.id],
+    queryKey: ["admin-user-activity", user?.id, identity],
     enabled: open && user !== null,
     queryFn: () =>
       apiFetch<{ entries: AuditEntry[]; next_cursor: string | null }>(
@@ -129,6 +131,7 @@ function UserDetailDialog({
 
 export function AdminUsersPage() {
   const queryClient = useQueryClient()
+  const identity = useIdentityKey()
   const [createOpen, setCreateOpen] = useState(false)
   const [editTarget, setEditTarget] = useState<AdminUser | null>(null)
   const [resetTarget, setResetTarget] = useState<AdminUser | null>(null)
@@ -147,7 +150,7 @@ export function AdminUsersPage() {
   const [resetPassword, setResetPassword] = useState("")
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ["admin-users"],
+    queryKey: ["admin-users", identity],
     queryFn: () => apiFetch<AdminUsersResponse>("/api/admin/users"),
   })
 

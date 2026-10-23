@@ -1,12 +1,13 @@
+import uuid
 from datetime import UTC, datetime
 from typing import Literal
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from cam.connections.orgs import DEFAULT_ORG_SLUG, ensure_org
+from cam.connections.orgs import ensure_org, get_org_by_id
 from cam.connections.passwords import hash_password
-from cam.db.models import CamToken, Connection, User
+from cam.db.models import CamToken, Connection, Org, User
 from cam.upstream.pool import SessionPool
 
 UserRole = Literal["admin", "user"]
@@ -89,7 +90,34 @@ async def deactivate_user(
     if pool is not None:
         for connection in connections:
             await pool.invalidate_connection(str(connection.service_id), str(connection.id))
+    # R12: a pending OAuth authorization must not complete after deactivation —
+    # purge the user's outstanding OAuth states so a later callback is rejected.
+    from cam.connections.oauth import delete_oauth_states
+
+    await delete_oauth_states(session, user_id=user.id)
     return user
+
+
+async def _resolve_creation_org(
+    session: AsyncSession, *, org_id: uuid.UUID | None, org_slug: str | None
+) -> Org:
+    """Pick the org a new user is created in.
+
+    Precedence: an explicit ``org_id`` (the authenticated admin's org, R02),
+    then an explicit ``org_slug`` (CLI/bootstrap). With neither, fall back to
+    the default-org bootstrap lookup so direct service-layer callers keep
+    working; admin HTTP routes always pass ``org_id``.
+    """
+    if org_id is not None:
+        if org_slug is not None:
+            raise UserError("provide either org_id or org_slug, not both")
+        org = await get_org_by_id(session, org_id)
+        if org is None:
+            raise UserError(f"org {org_id} does not exist")
+        return org
+    if org_slug is not None:
+        return await ensure_org(session, slug=org_slug)
+    return await ensure_org(session)
 
 
 async def create_user(
@@ -101,7 +129,8 @@ async def create_user(
     kind: UserKind = "person",
     handle: str | None = None,
     display_name: str | None = None,
-    org_slug: str = DEFAULT_ORG_SLUG,
+    org_id: uuid.UUID | None = None,
+    org_slug: str | None = None,
 ) -> User:
     if not password:
         raise UserError("password must not be empty")
@@ -116,7 +145,7 @@ async def create_user(
     if not resolved_display.strip():
         raise UserError("display name must not be empty")
 
-    org = await ensure_org(session, slug=org_slug)
+    org = await _resolve_creation_org(session, org_id=org_id, org_slug=org_slug)
     existing_email = await session.execute(select(User.id).where(User.email == normalized))
     if existing_email.first() is not None:
         raise EmailAlreadyRegistered(f"email {normalized} is already registered")

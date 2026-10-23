@@ -8,6 +8,7 @@ must be an admin and the org always comes from the identity.
 
 from __future__ import annotations
 
+import uuid
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Request
@@ -134,6 +135,7 @@ async def create_org_service(
                 timeout_ms=body.timeout_ms,
                 response_cap_tokens=body.response_cap_tokens,
                 tools=body.tools,
+                org_id=admin.org_id,
             )
             await db.commit()
         except ServiceAlreadyExists as exc:
@@ -158,7 +160,7 @@ async def resync_admin_service(
     session_factory = request.app.state.session_factory
     async with session_factory() as db:
         try:
-            service = await get_admin_service(db, slug=slug)
+            service = await get_admin_service(db, slug=slug, org_id=admin.org_id)
         except ServiceError as exc:
             raise _visibility_problem(exc) from None
         service_id = service.id
@@ -235,8 +237,8 @@ def _visibility_problem(exc: ServiceError) -> ApiProblem:
     return ApiProblem("VALIDATION_ERROR", message, 422)
 
 
-async def _visibility_state(db: AsyncSession, slug: str) -> dict[str, Any]:
-    service = await get_admin_service(db, slug=slug)
+async def _visibility_state(db: AsyncSession, slug: str, *, org_id: uuid.UUID) -> dict[str, Any]:
+    service = await get_admin_service(db, slug=slug, org_id=org_id)
     grantees = await list_service_visibility_grantees(db, service=service)
     return {
         "service": service_ref(service),
@@ -252,7 +254,7 @@ async def get_visibility(
     session_factory = request.app.state.session_factory
     async with session_factory() as db:
         try:
-            return await _visibility_state(db, slug)
+            return await _visibility_state(db, slug, org_id=admin.org_id)
         except ServiceError as exc:
             raise _visibility_problem(exc) from None
 
@@ -268,9 +270,11 @@ async def patch_visibility(
     session_factory = request.app.state.session_factory
     async with session_factory() as db:
         try:
-            await set_service_visibility(db, slug=slug, visibility=body.visibility)
+            await set_service_visibility(
+                db, slug=slug, visibility=body.visibility, org_id=admin.org_id
+            )
             await db.commit()
-            return await _visibility_state(db, slug)
+            return await _visibility_state(db, slug, org_id=admin.org_id)
         except ServiceError as exc:
             await db.rollback()
             raise _visibility_problem(exc) from None
@@ -287,9 +291,11 @@ async def change_grant_visibility(
     session_factory = request.app.state.session_factory
     async with session_factory() as db:
         try:
-            await grant_service_visibility(db, slug=slug, user_email=body.email)
+            await grant_service_visibility(
+                db, slug=slug, user_email=body.email, org_id=admin.org_id
+            )
             await db.commit()
-            return await _visibility_state(db, slug)
+            return await _visibility_state(db, slug, org_id=admin.org_id)
         except ServiceError as exc:
             await db.rollback()
             raise _visibility_problem(exc) from None
@@ -306,9 +312,11 @@ async def delete_grant_visibility(
     session_factory = request.app.state.session_factory
     async with session_factory() as db:
         try:
-            await revoke_service_visibility(db, slug=slug, user_email=body.email)
+            await revoke_service_visibility(
+                db, slug=slug, user_email=body.email, org_id=admin.org_id
+            )
             await db.commit()
-            return await _visibility_state(db, slug)
+            return await _visibility_state(db, slug, org_id=admin.org_id)
         except ServiceError as exc:
             await db.rollback()
             raise _visibility_problem(exc) from None
@@ -325,9 +333,11 @@ async def post_revoke_visibility(
     session_factory = request.app.state.session_factory
     async with session_factory() as db:
         try:
-            await revoke_service_visibility(db, slug=slug, user_email=body.email)
+            await revoke_service_visibility(
+                db, slug=slug, user_email=body.email, org_id=admin.org_id
+            )
             await db.commit()
-            return await _visibility_state(db, slug)
+            return await _visibility_state(db, slug, org_id=admin.org_id)
         except ServiceError as exc:
             await db.rollback()
             raise _visibility_problem(exc) from None

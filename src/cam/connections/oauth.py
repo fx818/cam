@@ -13,12 +13,14 @@ import base64
 import hashlib
 import json
 import secrets
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from urllib.parse import urlencode, urlparse
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cam.connections.crypto import MasterKeyRing, encrypt_secret, get_default_key_ring
@@ -33,6 +35,11 @@ REFRESH_LEEWAY_S = 60
 DEFAULT_SCOPES = ""
 WELL_KNOWN_RESOURCE = "/.well-known/oauth-protected-resource"
 WELL_KNOWN_AS = "/.well-known/oauth-authorization-server"
+
+# Callback used to drop a pooled MCP session after a credential change:
+# `invalidate(service_id, connection_id)`. Kept as a parameter so this module
+# never has to import the session pool (or FastAPI app state).
+InvalidateFn = Callable[[str, str], Awaitable[None]]
 
 
 class OAuthFlowError(Exception):
@@ -404,6 +411,7 @@ async def complete_authorize(
     base_url: str,
     ring: MasterKeyRing | None = None,
     connection_user_id: Any = None,
+    invalidate: InvalidateFn | None = None,
 ) -> Connection:
     del connection_user_id
     endpoints = await ensure_oauth_endpoints(session, service=service, base_url=base_url, ring=ring)
@@ -431,7 +439,35 @@ async def complete_authorize(
         session, service=service, user_id=user_id, ring=ring
     )
     await _store_tokens(session, service=service, connection=connection, token=token, ring=ring)
+    if invalidate is not None:
+        # New tokens were stored; a pooled MCP session still carries the old
+        # Authorization header (review R10).
+        await invalidate(str(service.id), str(connection.id))
     return connection
+
+
+async def delete_oauth_states(
+    session: AsyncSession,
+    *,
+    service_id: Any | None = None,
+    user_id: Any | None = None,
+) -> int:
+    """Delete pending OAuth state rows for a service and/or user.
+
+    Call when a user is deactivated or a service is disabled/deleted so a
+    stale authorize round-trip cannot complete and (re)activate a connection
+    (review R12).
+    """
+    if service_id is None and user_id is None:
+        raise ValueError("provide service_id and/or user_id")
+    conditions: list[Any] = []
+    if service_id is not None:
+        conditions.append(OAuthState.service_id == service_id)
+    if user_id is not None:
+        conditions.append(OAuthState.user_id == user_id)
+    result = cast("CursorResult[Any]", await session.execute(delete(OAuthState).where(*conditions)))
+    await session.flush()
+    return int(result.rowcount or 0)
 
 
 async def _get_or_create_connection(
@@ -471,24 +507,41 @@ async def refresh_if_needed(
     connection: Connection,
     base_url: str,
     ring: MasterKeyRing | None = None,
-) -> None:
-    """Refresh when `expires_at` is within 60s, under FOR UPDATE."""
+    invalidate: InvalidateFn | None = None,
+) -> bool:
+    """Refresh when `expires_at` is within 60s, under FOR UPDATE.
+
+    Returns ``True`` when new tokens were stored (the caller should drop any
+    pooled MCP session so the new access token is sent — review R10), else
+    ``False``.
+    """
     now = datetime.now(UTC)
     needs_refresh = connection.expires_at is not None and connection.expires_at <= now + timedelta(
         seconds=REFRESH_LEEWAY_S
     )
     if not needs_refresh:
-        return
+        return False
 
+    # Reload the locked row from the database (`populate_existing`): without it
+    # the identity map returns the stale object (old expiry/refresh token), the
+    # post-lock re-check reads stale values, and two callers can both exchange a
+    # rotating refresh token — the loser then wrongly flags a healthy
+    # connection as `needs_reconnect` (review R09).
     locked = (
         await session.execute(
-            select(Connection).where(Connection.id == connection.id).with_for_update()
+            select(Connection)
+            .where(Connection.id == connection.id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
         )
     ).scalar_one()
+    # Re-check against the freshly locked row.
+    if locked.status != "connected":
+        return False
     if locked.expires_at is None or locked.expires_at > datetime.now(UTC) + timedelta(
         seconds=REFRESH_LEEWAY_S
     ):
-        return
+        return False
 
     if locked.refresh_enc is None:
         locked.status = "needs_reconnect"
@@ -524,3 +577,6 @@ async def refresh_if_needed(
         connection.expires_at = locked.expires_at
         connection.status = locked.status
         connection.key_version = locked.key_version
+    if invalidate is not None:
+        await invalidate(str(service.id), str(locked.id))
+    return True

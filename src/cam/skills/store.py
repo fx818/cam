@@ -5,6 +5,7 @@ import uuid
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from cam.access.resolution import GLOBAL_OWNER
 from cam.db.models import (
     Service,
     Skill,
@@ -49,52 +50,55 @@ async def check_slug_available(
         raise SkillAlreadyExists(f"a skill with slug {slug!r} already exists here")
 
 
+async def _lookup_required_service(
+    session: AsyncSession, org_id: uuid.UUID, owner_part: str, slug: str
+) -> Service | None:
+    if owner_part == GLOBAL_OWNER:
+        result = await session.execute(
+            select(Service).where(
+                Service.org_id == org_id,
+                Service.tier.in_((GLOBAL_OWNER, "template")),
+                Service.slug == slug,
+            )
+        )
+        return result.scalar_one_or_none()
+    owner_id = (
+        await session.execute(
+            select(User.id).where(User.org_id == org_id, User.handle == owner_part)
+        )
+    ).scalar_one_or_none()
+    if owner_id is None:
+        return None
+    result = await session.execute(
+        select(Service).where(
+            Service.org_id == org_id,
+            Service.tier == "personal",
+            Service.owner_user_id == owner_id,
+            Service.slug == slug,
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+def _requires_unavailable(ref: str) -> SkillValidationError:
+    # A single opaque message for a missing owner handle, a missing service and
+    # an inaccessible service, so the error cannot be used as an existence
+    # oracle (R20). Access itself is decided by the `access/` module.
+    return SkillValidationError(f"'requires' entry {ref!r}: no accessible service in this org")
+
+
 async def _resolve_requires(
     session: AsyncSession, org_id: uuid.UUID, refs: tuple[str, ...]
 ) -> dict[str, Service]:
     from cam.skills.validation import parse_required_ref
 
-    normalized: list[str] = []
+    resolved: dict[str, Service] = {}
     for raw in refs:
         owner_part, slug = parse_required_ref(raw)
-        normalized.append(f"{owner_part}/{slug}")
-    owners: set[str] = {ref.split("/", 1)[0] for ref in normalized}
-    user_ids: dict[str, uuid.UUID] = {}
-    for owner_part in owners:
-        if owner_part == "global":
-            continue
-        row = await session.execute(
-            select(User.id).where(User.org_id == org_id, User.handle == owner_part)
-        )
-        found = row.scalar_one_or_none()
-        if found is None:
-            raise SkillValidationError(
-                f"'requires' entry {owner_part}/…: no user with handle {owner_part!r} in this org"
-            )
-        user_ids[owner_part] = found
-    resolved: dict[str, Service] = {}
-    for ref in normalized:
-        owner_part, slug = ref.split("/", 1)
-        if owner_part == "global":
-            result = await session.execute(
-                select(Service).where(
-                    Service.org_id == org_id,
-                    Service.tier.in_(("global", "template")),
-                    Service.slug == slug,
-                )
-            )
-        else:
-            result = await session.execute(
-                select(Service).where(
-                    Service.org_id == org_id,
-                    Service.tier == "personal",
-                    Service.owner_user_id == user_ids[owner_part],
-                    Service.slug == slug,
-                )
-            )
-        service = result.scalar_one_or_none()
+        ref = f"{owner_part}/{slug}"
+        service = await _lookup_required_service(session, org_id, owner_part, slug)
         if service is None:
-            raise SkillValidationError(f"'requires' entry {ref!r}: no such service in this org")
+            raise _requires_unavailable(ref)
         resolved[ref] = service
     return resolved
 

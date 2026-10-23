@@ -16,6 +16,7 @@ from cam.upstream.errors import (
     UpstreamRemoteError,
     UpstreamTimeoutError,
     UpstreamUnavailableError,
+    redact,
 )
 from cam.upstream.pinning import pinned_transport
 from cam.upstream.url import PinnedDestination, UrlPolicy, admit_url, validate_outbound_url
@@ -28,7 +29,9 @@ async def _pin(url: str, policy: UrlPolicy) -> PinnedDestination | None:
             return None
         pinned = await validate_outbound_url(url, policy=policy)
     except ValueError as exc:
-        raise UpstreamUnavailableError(f"URL policy rejected destination: {exc}") from exc
+        raise UpstreamUnavailableError(
+            f"URL policy rejected destination: {redact(str(exc))}"
+        ) from exc
     return pinned if pinned.ip is not None else None
 
 
@@ -51,9 +54,9 @@ async def fetch_json(
         ) as client:
             response = await client.get(url)
     except httpx.TimeoutException as exc:
-        raise UpstreamTimeoutError(str(exc)) from exc
+        raise UpstreamTimeoutError(redact(str(exc))) from exc
     except httpx.HTTPError as exc:
-        raise UpstreamUnavailableError(str(exc)) from exc
+        raise UpstreamUnavailableError(redact(str(exc))) from exc
     if response.status_code in (301, 302, 303, 307, 308):
         raise UpstreamRemoteError("unexpected redirect while fetching OAuth metadata")
     if response.status_code >= 400:
@@ -91,9 +94,9 @@ async def post_form(
                 kwargs["auth"] = basic_auth
             response = await client.post(url, data=data, **kwargs)
     except httpx.TimeoutException as exc:
-        raise UpstreamTimeoutError(str(exc)) from exc
+        raise UpstreamTimeoutError(redact(str(exc))) from exc
     except httpx.HTTPError as exc:
-        raise UpstreamUnavailableError(str(exc)) from exc
+        raise UpstreamUnavailableError(redact(str(exc))) from exc
     if response.status_code in (301, 302, 303, 307, 308):
         raise UpstreamRemoteError("unexpected redirect from OAuth token endpoint")
     try:
@@ -129,9 +132,9 @@ async def post_json(
         ) as client:
             response = await client.post(url, json=body)
     except httpx.TimeoutException as exc:
-        raise UpstreamTimeoutError(str(exc)) from exc
+        raise UpstreamTimeoutError(redact(str(exc))) from exc
     except httpx.HTTPError as exc:
-        raise UpstreamUnavailableError(str(exc)) from exc
+        raise UpstreamUnavailableError(redact(str(exc))) from exc
     if response.status_code in (301, 302, 303, 307, 308):
         raise UpstreamRemoteError("unexpected redirect from OAuth registration endpoint")
     try:

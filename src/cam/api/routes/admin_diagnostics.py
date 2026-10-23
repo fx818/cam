@@ -92,8 +92,16 @@ async def explain_audit_entry(
 ) -> dict[str, object]:
     session_factory = request.app.state.session_factory
     async with session_factory() as db:
-        entry = await db.get(AuditLog, entry_id)
-        if entry is None or entry.org_id != admin.org_id:
+        # AuditLog has a composite PK (id, ts); `session.get` cannot be used.
+        entry = (
+            await db.execute(
+                select(AuditLog)
+                .where(AuditLog.org_id == admin.org_id, AuditLog.id == entry_id)
+                .order_by(AuditLog.ts.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if entry is None:
             raise ApiProblem("NOT_FOUND", "Activity entry not found.", 404)
         stages = await _explain_stages(db, entry)
     return {"entry_id": str(entry_id), "explain": stages}
